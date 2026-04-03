@@ -1,0 +1,28 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "context7": {
+      "type": "local",
+      "command": [
+        "bun",
+        "x",
+        "@upstash/context7-mcp",
+        "--api-key",
+        "hidden."
+      ],
+      "enabled": true
+    },
+
+    "notion": {
+      "type": "local",
+      "command": [
+        "bun",
+        "x",
+        "@notionhq/notion-mcp-server",
+        "--notion-token",
+        "hidden."
+      ],
+      "enabled": true
+    }
+  }
+}

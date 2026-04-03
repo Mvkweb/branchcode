@@ -16,3 +16,72 @@
     background: rgba(255, 255, 255, 0.2);
   }
 }
+
+@layer base {
+  .markdown-body a {
+    color: #818cf8;
+  }
+
+  .markdown-body a:hover {
+    text-decoration: underline;
+  }
+
+  .markdown-body strong {
+    color: #f5f5f5;
+  }
+
+  .markdown-body h1,
+  .markdown-body h2,
+  .markdown-body h3,
+  .markdown-body h4 {
+    color: #e5e5e5;
+    font-weight: 600;
+    margin-top: 1em;
+    margin-bottom: 0.5em;
+  }
+
+  .markdown-body h1 { font-size: 1.5em; }
+  .markdown-body h2 { font-size: 1.25em; }
+  .markdown-body h3 { font-size: 1.1em; }
+
+  .markdown-body table {
+    border-collapse: collapse;
+    margin: 0.75em 0;
+    width: 100%;
+  }
+
+  .markdown-body th,
+  .markdown-body td {
+    border: 1px solid #2a2a2a;
+    padding: 6px 12px;
+    text-align: left;
+  }
+
+  .markdown-body th {
+    background: #111;
+    font-weight: 600;
+  }
+
+  .markdown-body blockquote {
+    border-left: 3px solid #4f46e5;
+    padding-left: 1em;
+    margin: 0.75em 0;
+    color: #999;
+  }
+
+  .markdown-body hr {
+    border: none;
+    border-top: 1px solid #222;
+    margin: 1em 0;
+  }
+
+  .markdown-body img {
+    max-width: 100%;
+    border-radius: 8px;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+  }
+}

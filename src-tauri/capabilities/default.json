@@ -3,6 +3,9 @@
   "description": "Default capability for the main window",
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "opener:default",
+    "shell:allow-spawn",
+    "shell:allow-execute"
   ]
 }
