@@ -18,6 +18,16 @@ export interface Message {
   streaming?: boolean;
 }
 
+const stringifySafe = (value: unknown) => {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+};
+
 export function useChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -28,41 +38,64 @@ export function useChat() {
   const toolResultsRef = useRef<{ name: string; output: string }[]>([]);
   const fileEditsRef = useRef<string[]>([]);
   const loadingRef = useRef(false);
+  const loadRequestRef = useRef(0);
+  const streamingSessionRef = useRef<string | null>(null);
 
   const loadMessages = useCallback(async (sessionId: string) => {
+    const requestId = ++loadRequestRef.current;
+
     try {
       const ocMessages = await getMessages(sessionId);
+
+      if (requestId !== loadRequestRef.current) return;
+      if (streamingSessionRef.current === sessionId) return;
+
       const mapped: Message[] = ocMessages.map((m: OcMessageResponse) => {
-        const textParts = m.parts
+        const parts = (m.parts ?? []) as any[];
+
+        const textParts = parts
           .filter((p) => p.type === 'text')
-          .map((p) => p.text || '')
+          .map((p) => p.text || p.content || '')
           .join('');
 
-        const reasoningParts = m.parts
+        const reasoningParts = parts
           .filter((p) => p.type === 'reasoning')
-          .map((p) => p.text || '')
+          .map((p) => p.text || p.content || '')
           .join('');
 
-        const toolCalls = m.parts
+        const toolCalls = parts
           .filter((p) => p.type === 'tool')
           .map((p) => ({
-            name: p.name || 'unknown',
-            input: p.input ? JSON.stringify(p.input, null, 2) : '',
-            status: p.status || 'completed',
+            name: p.name || p.tool || 'unknown',
+            input: stringifySafe(p.input ?? p.state?.input),
+            status: p.status || p.state?.status || 'completed',
           }));
 
-        const toolResults = m.parts
-          .filter((p) => p.type === 'tool_result')
-          .map((p) => ({
-            name: p.name || 'unknown',
-            output: p.output
-              ? JSON.stringify(p.output, null, 2)
-              : p.content || '',
-          }));
+        const toolResults = parts.flatMap((p) => {
+          if (p.type === 'tool_result') {
+            return [
+              {
+                name: p.name || p.tool || 'unknown',
+                output: stringifySafe(p.output ?? p.content),
+              },
+            ];
+          }
 
-        const fileEdits = m.parts
+          if (p.type === 'tool' && (p.output != null || p.state?.output != null)) {
+            return [
+              {
+                name: p.name || p.tool || 'unknown',
+                output: stringifySafe(p.output ?? p.state?.output),
+              },
+            ];
+          }
+
+          return [];
+        });
+
+        const fileEdits = parts
           .filter((p) => p.type === 'file')
-          .map((p) => p.path || '')
+          .map((p) => p.path || p.file || '')
           .filter(Boolean);
 
         return {
@@ -85,6 +118,8 @@ export function useChat() {
     async (sessionId: string, content: string) => {
       if (!content.trim() || isStreaming || loadingRef.current) return;
       loadingRef.current = true;
+      streamingSessionRef.current = sessionId;
+      loadRequestRef.current += 1;
 
       const userMsg: Message = {
         id: crypto.randomUUID(),
@@ -107,43 +142,41 @@ export function useChat() {
       toolResultsRef.current = [];
       fileEditsRef.current = [];
 
+      const assistantId = assistantMsg.id;
+
+      const updateAssistant = (updater: (msg: Message) => Message) => {
+        setMessages((prev) =>
+          prev.map((msg) => (msg.id === assistantId ? updater(msg) : msg))
+        );
+      };
+
       const channel = new Channel<StreamEvent>();
 
       channel.onmessage = (event: StreamEvent) => {
         switch (event.event) {
           case 'token':
-            if (event.data.token) {
+            if (typeof event.data.token === 'string') {
               streamContentRef.current += event.data.token;
               const currentContent = streamContentRef.current;
-              setMessages((prev) => {
-                const updated = [...prev];
-                const lastIdx = updated.length - 1;
-                if (updated[lastIdx]?.streaming) {
-                  updated[lastIdx] = {
-                    ...updated[lastIdx],
-                    content: currentContent,
-                  };
-                }
-                return updated;
-              });
+
+              updateAssistant((msg) =>
+                msg.streaming
+                  ? { ...msg, content: currentContent }
+                  : msg
+              );
             }
             break;
 
           case 'reasoning':
-            if (event.data.text) {
+            if (typeof event.data.text === 'string') {
               reasoningRef.current += event.data.text;
               const currentReasoning = reasoningRef.current;
-              setMessages((prev) => {
-                const updated = [...prev];
-                const lastIdx = updated.length - 1;
-                if (updated[lastIdx]?.streaming) {
-                  updated[lastIdx] = {
-                    ...updated[lastIdx],
-                    reasoning: currentReasoning,
-                  };
-                }
-                return updated;
-              });
+
+              updateAssistant((msg) =>
+                msg.streaming
+                  ? { ...msg, reasoning: currentReasoning }
+                  : msg
+              );
             }
             break;
 
@@ -152,6 +185,7 @@ export function useChat() {
               const existingIdx = toolCallsRef.current.findIndex(
                 (t) => t.name === event.data.name && t.status === 'pending'
               );
+
               if (existingIdx >= 0 && event.data.status !== 'pending') {
                 const existing = toolCallsRef.current[existingIdx];
                 if (existing) {
@@ -162,23 +196,19 @@ export function useChat() {
                 }
               } else {
                 toolCallsRef.current.push({
-                  name: event.data.name!,
+                  name: event.data.name,
                   input: event.data.input || '',
                   status: event.data.status || 'pending',
                 });
               }
+
               setStatus(`${event.data.name} (${event.data.status || 'pending'})`);
-              setMessages((prev) => {
-                const updated = [...prev];
-                const lastIdx = updated.length - 1;
-                if (updated[lastIdx]?.streaming) {
-                  updated[lastIdx] = {
-                    ...updated[lastIdx],
-                    toolCalls: [...toolCallsRef.current],
-                  };
-                }
-                return updated;
-              });
+
+              updateAssistant((msg) =>
+                msg.streaming
+                  ? { ...msg, toolCalls: [...toolCallsRef.current] }
+                  : msg
+              );
             }
             break;
 
@@ -188,34 +218,24 @@ export function useChat() {
                 name: event.data.name!,
                 output: event.data.output || '',
               });
-              setMessages((prev) => {
-                const updated = [...prev];
-                const lastIdx = updated.length - 1;
-                if (updated[lastIdx]?.streaming) {
-                  updated[lastIdx] = {
-                    ...updated[lastIdx],
-                    toolResults: [...toolResultsRef.current],
-                  };
-                }
-                return updated;
-              });
+
+              updateAssistant((msg) =>
+                msg.streaming
+                  ? { ...msg, toolResults: [...toolResultsRef.current] }
+                  : msg
+              );
             }
             break;
 
           case 'file_edit':
             if (event.data.path) {
               fileEditsRef.current.push(event.data.path);
-              setMessages((prev) => {
-                const updated = [...prev];
-                const lastIdx = updated.length - 1;
-                if (updated[lastIdx]?.streaming) {
-                  updated[lastIdx] = {
-                    ...updated[lastIdx],
-                    fileEdits: [...fileEditsRef.current],
-                  };
-                }
-                return updated;
-              });
+
+              updateAssistant((msg) =>
+                msg.streaming
+                  ? { ...msg, fileEdits: [...fileEditsRef.current] }
+                  : msg
+              );
             }
             break;
 
@@ -223,49 +243,43 @@ export function useChat() {
             setIsStreaming(false);
             setStatus(null);
             loadingRef.current = false;
-            setMessages((prev) => {
-              const updated = [...prev];
-              const lastIdx = updated.length - 1;
-              if (updated[lastIdx]?.streaming) {
-                updated[lastIdx] = {
-                  ...updated[lastIdx],
-                  content: event.data.full_text || streamContentRef.current,
-                  streaming: false,
-                  reasoning: reasoningRef.current || undefined,
-                  toolCalls:
-                    toolCallsRef.current.length > 0
-                      ? [...toolCallsRef.current]
-                      : undefined,
-                  toolResults:
-                    toolResultsRef.current.length > 0
-                      ? [...toolResultsRef.current]
-                      : undefined,
-                  fileEdits:
-                    fileEditsRef.current.length > 0
-                      ? [...fileEditsRef.current]
-                      : undefined,
-                };
-              }
-              return updated;
-            });
+            streamingSessionRef.current = null;
+
+            updateAssistant((msg) =>
+              msg.streaming
+                ? {
+                    ...msg,
+                    content: event.data.full_text || streamContentRef.current,
+                    streaming: false,
+                    reasoning: reasoningRef.current || undefined,
+                    toolCalls:
+                      toolCallsRef.current.length > 0
+                        ? [...toolCallsRef.current]
+                        : undefined,
+                    toolResults:
+                      toolResultsRef.current.length > 0
+                        ? [...toolResultsRef.current]
+                        : undefined,
+                    fileEdits:
+                      fileEditsRef.current.length > 0
+                        ? [...fileEditsRef.current]
+                        : undefined,
+                  }
+                : msg
+            );
             break;
 
           case 'error':
             setIsStreaming(false);
             setStatus(null);
             loadingRef.current = false;
-            setMessages((prev) => {
-              const updated = [...prev];
-              const lastIdx = updated.length - 1;
-              if (updated[lastIdx]?.streaming) {
-                updated[lastIdx] = {
-                  ...updated[lastIdx],
-                  content: `Error: ${event.data.message}`,
-                  streaming: false,
-                };
-              }
-              return updated;
-            });
+            streamingSessionRef.current = null;
+
+            updateAssistant((msg) =>
+              msg.streaming
+                ? { ...msg, content: `Error: ${event.data.message}`, streaming: false }
+                : msg
+            );
             break;
 
           case 'status':
@@ -279,24 +293,21 @@ export function useChat() {
       } catch (err: any) {
         setIsStreaming(false);
         loadingRef.current = false;
-        setMessages((prev) => {
-          const updated = [...prev];
-          const lastIdx = updated.length - 1;
-          if (updated[lastIdx]?.streaming) {
-            updated[lastIdx] = {
-              ...updated[lastIdx],
-              content: `${err?.toString() || 'Unknown error'}`,
-              streaming: false,
-            };
-          }
-          return updated;
-        });
+        streamingSessionRef.current = null;
+
+        updateAssistant((msg) =>
+          msg.streaming
+            ? { ...msg, content: `${err?.toString() || 'Unknown error'}`, streaming: false }
+            : msg
+        );
       }
     },
     [isStreaming]
   );
 
   const clearMessages = useCallback(() => {
+    loadRequestRef.current += 1;
+    streamingSessionRef.current = null;
     setMessages([]);
     setIsStreaming(false);
     setStatus(null);

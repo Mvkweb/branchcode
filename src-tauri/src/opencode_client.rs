@@ -1,9 +1,11 @@
 use std::sync::Arc;
+use std::time::Duration;
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::ipc::Channel;
+use tokio::sync::oneshot;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OcSession {
@@ -20,17 +22,61 @@ pub struct OcMessage {
     pub session_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OcToolState {
+    pub input: Option<Value>,
+    pub output: Option<Value>,
+    pub status: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OcPart {
     #[serde(rename = "type")]
     pub part_type: String,
     pub text: Option<String>,
     pub content: Option<String>,
+
+    #[serde(alias = "tool")]
     pub name: Option<String>,
+
     pub input: Option<Value>,
     pub output: Option<Value>,
     pub status: Option<String>,
+
+    #[serde(alias = "file")]
     pub path: Option<String>,
+
+    #[serde(default)]
+    pub state: Option<OcToolState>,
+}
+
+impl OcPart {
+    fn normalize(mut self) -> Self {
+        if self.text.is_none() {
+            self.text = self.content.clone();
+        }
+
+        if let Some(state) = &self.state {
+            if self.input.is_none() {
+                self.input = state.input.clone();
+            }
+            if self.output.is_none() {
+                self.output = state.output.clone();
+            }
+            if self.status.is_none() {
+                self.status = state.status.clone();
+            }
+        }
+
+        self
+    }
+}
+
+impl OcMessageResponse {
+    fn normalize(mut self) -> Self {
+        self.parts = self.parts.into_iter().map(OcPart::normalize).collect();
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,9 +184,12 @@ impl OpenCodeClient {
             .await
             .map_err(|e| format!("Failed to get messages: {}", e))?;
 
-        resp.json()
+        let messages: Vec<OcMessageResponse> = resp
+            .json()
             .await
-            .map_err(|e| format!("Failed to parse messages: {}", e))
+            .map_err(|e| format!("Failed to parse messages: {}", e))?;
+
+        Ok(messages.into_iter().map(OcMessageResponse::normalize).collect())
     }
 
     pub async fn send_message(
@@ -167,7 +216,9 @@ impl OpenCodeClient {
             }
         });
 
-        // Start SSE listener
+        // Start SSE listener with ready signal
+        let (ready_tx, ready_rx) = oneshot::channel();
+
         let client_clone = self.client.clone();
         let base_url_clone = self.base_url.clone();
         let sse_handle = tokio::spawn(Self::stream_events(
@@ -175,7 +226,11 @@ impl OpenCodeClient {
             base_url_clone,
             session_id.to_string(),
             channel.clone(),
+            Some(ready_tx),
         ));
+
+        // Wait briefly for SSE connection so early reasoning isn't missed
+        let _ = tokio::time::timeout(Duration::from_secs(2), ready_rx).await;
 
         let _ = channel.send(OcStreamEvent::Status {
             message: format!("{} / {}", provider, model_id),
@@ -206,6 +261,8 @@ impl OpenCodeClient {
             .await
             .map_err(|e| format!("Failed to parse response: {}", e))?;
 
+        let result = result.normalize();
+
         // Abort SSE listener
         sse_handle.abort();
 
@@ -219,7 +276,7 @@ impl OpenCodeClient {
                     }
                 }
                 "tool" => {
-                    if let (Some(name), Some(state)) = (&part.name, &part.status) {
+                    if let (Some(name), Some(status)) = (&part.name, &part.status) {
                         let input_str = part
                             .input
                             .as_ref()
@@ -228,7 +285,7 @@ impl OpenCodeClient {
                         let _ = channel.send(OcStreamEvent::ToolCall {
                             name: name.clone(),
                             input: input_str,
-                            status: state.clone(),
+                            status: status.clone(),
                         });
                     }
                 }
@@ -257,11 +314,33 @@ impl OpenCodeClient {
         Ok(full_text)
     }
 
+    fn value_to_string(v: &Value) -> Option<String> {
+        if let Some(s) = v.as_str() {
+            return Some(s.to_string());
+        }
+
+        v.get("text")
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string())
+    }
+
+    fn extract_delta(props: &Value, part: &Value) -> Option<String> {
+        props
+            .get("delta")
+            .and_then(Self::value_to_string)
+            .or_else(|| props.get("text").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .or_else(|| part.get("delta").and_then(Self::value_to_string))
+            .or_else(|| part.get("textDelta").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .or_else(|| part.get("text").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .or_else(|| part.get("content").and_then(|v| v.as_str()).map(|s| s.to_string()))
+    }
+
     async fn stream_events(
         client: Arc<Client>,
         base_url: Arc<String>,
         session_id: String,
         channel: Channel<OcStreamEvent>,
+        ready_tx: Option<oneshot::Sender<()>>,
     ) {
         let resp = match client
             .get(&format!("{}/event", base_url))
@@ -271,6 +350,10 @@ impl OpenCodeClient {
             Ok(r) => r,
             Err(_) => return,
         };
+
+        if let Some(tx) = ready_tx {
+            let _ = tx.send(());
+        }
 
         let mut stream = resp.bytes_stream();
         let mut buffer = String::new();
@@ -316,12 +399,15 @@ impl OpenCodeClient {
                 }
 
                 match event_type {
-                    "message.part.updated" => {
+                    "message.part.updated" | "message.part.added" => {
                         let part = props.get("part").cloned().unwrap_or(Value::Null);
-                        let delta = props.get("delta").and_then(|v| v.as_str());
+                        let delta = Self::extract_delta(&props, &part);
 
                         let part_type = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                        let tool_name = part.get("tool").and_then(|v| v.as_str());
+                        let tool_name = part
+                            .get("tool")
+                            .or_else(|| part.get("name"))
+                            .and_then(|v| v.as_str());
                         let state = part.get("state").cloned().unwrap_or(Value::Null);
                         let state_status = state.get("status").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -357,13 +443,15 @@ impl OpenCodeClient {
                                         status,
                                     });
 
-                                    // If completed, also send result
                                     if state_status == "completed" {
                                         let output = state
                                             .get("output")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("")
-                                            .to_string();
+                                            .map(|v| {
+                                                v.as_str()
+                                                    .map(|s| s.to_string())
+                                                    .unwrap_or_else(|| serde_json::to_string_pretty(v).unwrap_or_default())
+                                            })
+                                            .unwrap_or_default();
                                         let _ = channel.send(OcStreamEvent::ToolResult {
                                             name: name.to_string(),
                                             output,

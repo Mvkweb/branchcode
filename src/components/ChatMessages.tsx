@@ -5,12 +5,10 @@ import {
   ChevronRight,
   Check,
   Loader2,
-  FileText,
   Pencil,
   Terminal,
   Wrench,
   BookOpen,
-  Clock,
 } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -24,19 +22,20 @@ interface Props {
 
 function ShimmerText({ children }: { children: string }) {
   return (
-    <span className="relative inline-block overflow-hidden">
-      <span className="text-neutral-500">{children}</span>
-      <span
-        className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent"
-        style={{
-          animation: 'shimmer 2s ease-in-out infinite',
-          backgroundSize: '200% 100%',
-        }}
-      />
+    <span
+      className="inline-block bg-clip-text text-transparent"
+      style={{
+        backgroundImage:
+          'linear-gradient(90deg, #737373 25%, #e5e5e5 50%, #737373 75%)',
+        backgroundSize: '200% 100%',
+        animation: 'shimmer 2s infinite linear',
+      }}
+    >
+      {children}
       <style>{`
         @keyframes shimmer {
-          0% { background-position: -200% 0; }
-          100% { background-position: 200% 0; }
+          0% { background-position: 200% 0; }
+          100% { background-position: -200% 0; }
         }
       `}</style>
     </span>
@@ -399,8 +398,11 @@ export function ChatMessages({ message }: Props) {
       className="w-full space-y-3"
     >
       {/* Thinking */}
-      {message.reasoning && (
-        <ThinkingBlock reasoning={message.reasoning} isStreaming={!!message.streaming} />
+      {(message.reasoning || message.streaming) && (
+        <ThinkingBlock
+          reasoning={message.reasoning ?? ''}
+          isStreaming={!!message.streaming}
+        />
       )}
 
       {/* Explored files count (subtle, like reference) */}

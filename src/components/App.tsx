@@ -352,13 +352,13 @@ export default function App() {
   const [input, setInput] = useState('');
   const [config, setConfig] = useState<ConfigInfo | null>(null);
   const [showFileTree, setShowFileTree] = useState(false);
-  const [streamStart, setStreamStart] = useState(0);
   const [elapsed, setElapsed] = useState(0);
 
   const isVisible = isPinned || isHovered;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const suppressAutoLoadSessionRef = useRef<string | null>(null);
 
   const { messages, isStreaming, status, send, loadMessages, clearMessages } = useChat();
   const { sessions, activeSessionId, createSession, deleteSession, selectSession } =
@@ -378,11 +378,16 @@ export default function App() {
   }, [config?.project_dir, loadDirectory]);
 
   useEffect(() => {
-    if (activeSessionId) {
-      clearMessages();
-      loadMessages(activeSessionId);
+    if (!activeSessionId) return;
+
+    if (suppressAutoLoadSessionRef.current === activeSessionId) {
+      suppressAutoLoadSessionRef.current = null;
+      return;
     }
-  }, [activeSessionId]);
+
+    clearMessages();
+    loadMessages(activeSessionId);
+  }, [activeSessionId, clearMessages, loadMessages]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -398,25 +403,34 @@ export default function App() {
 
   // Elapsed timer for streaming
   useEffect(() => {
-    if (isStreaming) {
-      setStreamStart(Date.now());
-      const interval = setInterval(() => {
-        setElapsed((Date.now() - streamStart) / 1000);
-      }, 100);
-      return () => clearInterval(interval);
+    if (!isStreaming) {
+      setElapsed(0);
+      return;
     }
-    setElapsed(0);
+
+    const start = Date.now();
+    const interval = setInterval(() => {
+      setElapsed((Date.now() - start) / 1000);
+    }, 100);
+
+    return () => clearInterval(interval);
   }, [isStreaming]);
 
   const handleSend = useCallback(async () => {
-    if (!input.trim() || isStreaming || !config?.model) return;
+    const text = input.trim();
+    if (!text || isStreaming || !config?.model) return;
+
     let sessionId = activeSessionId;
+
     if (!sessionId) {
-      const session = await createSession(input.trim().slice(0, 50));
-      if (session) sessionId = session.id;
-      else return;
+      const session = await createSession(text.slice(0, 50));
+      if (!session) return;
+
+      sessionId = session.id;
+      suppressAutoLoadSessionRef.current = sessionId;
     }
-    await send(sessionId!, input);
+
+    await send(sessionId, text);
     setInput('');
   }, [input, isStreaming, config?.model, activeSessionId, createSession, send]);
 
