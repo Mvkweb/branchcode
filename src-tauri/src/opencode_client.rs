@@ -146,9 +146,10 @@ impl OpenCodeClient {
     }
 
     pub async fn create_session(&self, title: Option<String>) -> Result<OcSession, String> {
-        let body = serde_json::json!({
-            "title": title.unwrap_or_default()
-        });
+        let body = match title {
+            Some(t) if !t.is_empty() => serde_json::json!({ "title": t }),
+            _ => serde_json::json!({}),
+        };
 
         let resp = self
             .client

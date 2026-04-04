@@ -39,6 +39,13 @@ const ClonkLogo = ({ className }: { className?: string }) => (
   </svg>
 );
 
+const ModelSvgIcon = ({ className }: { className?: string }) => (
+  <svg viewBox="0 0 512 512" fill="none" className={className}>
+    <path d="M320 224V352H192V224H320Z" fill="#8A8A8A"/>
+    <path fillRule="evenodd" clipRule="evenodd" d="M384 416H128V96H384V416ZM320 160H192V352H320V160Z" fill="white"/>
+  </svg>
+);
+
 // ── Context Ring ──
 
 function ContextRing({ percent }: { percent: number }) {
@@ -208,31 +215,48 @@ function ModelDropdown({
     setSaving(null);
   };
 
-  const label = getModelLabel(config?.model);
-
   return (
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="text-neutral-400 hover:text-neutral-200 transition-colors flex items-center gap-1.5 p-1 rounded-md hover:bg-[#222]"
+        className={`flex items-center gap-1.5 p-1 rounded-lg transition-colors ${
+          open ? 'bg-[#222]' : 'hover:bg-[#222]'
+        }`}
       >
-        <div className="w-5 h-5 bg-[#e87b35]/20 rounded flex items-center justify-center">
-          <span className="text-[10px]">👾</span>
+        <div className="w-6 h-6 rounded-[6px] flex items-center justify-center overflow-hidden">
+          <ModelSvgIcon className="w-6 h-6" />
         </div>
-        {label && <span className="text-[12px] max-w-[100px] truncate">{label}</span>}
-        <ChevronDown size={12} className="opacity-50" />
+        <ChevronDown size={14} className="text-neutral-500" />
       </button>
 
       <AnimatePresence>
         {open && (
           <motion.div
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 6 }}
-            transition={{ duration: 0.12 }}
-            className="absolute bottom-full mb-2 left-0 w-[280px] bg-[#111] border border-[#262626] rounded-xl shadow-2xl shadow-black/50 overflow-hidden z-50"
+            initial={{ opacity: 0, scale: 0.96, y: 6 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 6 }}
+            transition={{ duration: 0.15, ease: 'easeOut' }}
+            style={{ transformOrigin: 'bottom left' }}
+            className="absolute bottom-full mb-2 left-0 w-[260px] bg-[#111] border border-[#262626] rounded-xl shadow-2xl shadow-black/50 overflow-hidden z-50 flex flex-col p-1.5"
           >
-            <div className="p-1.5 max-h-[300px] overflow-y-auto custom-scrollbar">
+            {/* Provider Section */}
+            <div className="flex flex-col gap-0.5">
+              <button className="w-full flex items-center justify-between px-2 py-2 rounded-lg bg-[#1a1a1a] text-neutral-200 transition-colors">
+                <div className="flex items-center gap-3">
+                  <div className="w-7 h-7 rounded-md flex items-center justify-center overflow-hidden">
+                    <ModelSvgIcon className="w-7 h-7" />
+                  </div>
+                  <span className="text-[14px] font-medium text-neutral-100">Opencode</span>
+                </div>
+                <Check size={16} className="text-neutral-300" />
+              </button>
+            </div>
+
+            <div className="h-px bg-[#262626] mx-2 my-2" />
+
+            {/* Model Section */}
+            <div className="px-2 py-1 text-[12px] font-medium text-neutral-500 mb-1">Model</div>
+            <div className="flex flex-col gap-0.5 max-h-[240px] overflow-y-auto custom-scrollbar">
               {FREE_MODELS.map((m) => {
                 const active = config?.model === m.id;
                 const isSaving = saving === m.id;
@@ -241,16 +265,13 @@ function ModelDropdown({
                     key={m.id}
                     onClick={() => pick(m.id)}
                     disabled={!!saving}
-                    className={`w-full flex items-center gap-3 p-2.5 rounded-lg text-left transition-colors
-                      ${active ? 'bg-[#1a1a1a]' : 'hover:bg-[#1a1a1a]'}
+                    className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-left transition-colors
+                      ${active ? 'bg-[#1a1a1a] text-neutral-200' : 'text-neutral-300 hover:bg-[#1a1a1a] hover:text-neutral-200'}
                       ${saving && !isSaving ? 'opacity-40' : ''}`}
                   >
-                    <div className="flex-1 min-w-0">
-                      <div className="text-[13px] font-medium text-neutral-200">{m.label}</div>
-                      <div className="text-[11px] text-neutral-500">{m.desc}</div>
-                    </div>
-                    {isSaving && <Loader2 size={14} className="animate-spin text-neutral-400" />}
-                    {active && !isSaving && <Check size={14} className="text-neutral-400" />}
+                    <span className="text-[14px] truncate">{m.label}</span>
+                    {isSaving && <Loader2 size={16} className="animate-spin text-neutral-400" />}
+                    {active && !isSaving && <Check size={16} className="text-neutral-300" />}
                   </button>
                 );
               })}
@@ -361,7 +382,7 @@ export default function App() {
   const suppressAutoLoadSessionRef = useRef<string | null>(null);
 
   const { messages, isStreaming, status, send, loadMessages, clearMessages } = useChat();
-  const { sessions, activeSessionId, createSession, deleteSession, selectSession } =
+  const { sessions, activeSessionId, createSession, deleteSession, selectSession, loadSessions } =
     useSessions();
   const { files, loadDirectory } = useFileTree();
 
@@ -432,6 +453,7 @@ export default function App() {
 
     await send(sessionId, text);
     setInput('');
+    await loadSessions();
   }, [input, isStreaming, config?.model, activeSessionId, createSession, send]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -676,25 +698,16 @@ export default function App() {
                   }
                 />
                 <div className="flex items-center justify-between mt-3">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
                     <button className="text-neutral-500 hover:text-neutral-300 transition-colors p-1.5 rounded-lg hover:bg-[#222]">
                       <ImageIcon size={18} />
                     </button>
-                    <div className="h-4 w-px bg-[#282828]" />
+                    <ModelDropdown config={config} onChanged={loadConfig} />
+                    <div className="h-4 w-px bg-[#282828] mx-1" />
                     <button className="flex items-center gap-1.5 text-sm text-neutral-400 hover:text-neutral-200 transition-colors p-1.5 rounded-lg hover:bg-[#222]">
-                      <div className="w-5 h-5 bg-[#e87b35]/20 rounded flex items-center justify-center">
-                        <span className="text-xs">👾</span>
-                      </div>
-                      {config?.model && (
-                        <span className="text-[12px] text-neutral-500 max-w-[100px] truncate">
-                          {getModelLabel(config.model)}
-                        </span>
-                      )}
-                    </button>
-                    <div className="h-4 w-px bg-[#282828]" />
-                    <button className="flex items-center gap-2 text-sm text-neutral-400 hover:text-neutral-200 transition-colors p-1.5 rounded-lg hover:bg-[#222]">
                       <CircleDashed size={16} className="text-[#e0443e]" />
-                      Full-Stack
+                      MCP Servers
+                      <ChevronDown size={14} className="opacity-50" />
                     </button>
                   </div>
                   <button
