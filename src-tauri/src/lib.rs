@@ -1,5 +1,6 @@
 mod opencode_client;
 mod server;
+mod git;
 
 use opencode_client::OcStreamEvent;
 use serde::Serialize;
@@ -11,6 +12,7 @@ struct AppState {
     client: Arc<opencode_client::OpenCodeClient>,
     project_dir: String,
     model: std::sync::Mutex<String>,
+    git: std::sync::Mutex<Option<git::GitService>>,
 }
 
 // ── Config commands ──
@@ -142,21 +144,148 @@ async fn get_model_info(
     state.client.get_model_info(&provider_id, &model_id).await
 }
 
+#[tauri::command]
+async fn get_providers(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    state.client.get_providers().await
+}
+
+#[tauri::command]
+async fn get_available_models(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    state.client.get_available_free_models().await
+}
+
+// ── Git commands ──
+
+#[tauri::command]
+fn get_git_status(state: State<AppState>) -> Result<git::GitStatus, String> {
+    let git_guard = state.git.lock().unwrap();
+    if let Some(git_svc) = git_guard.as_ref() {
+        git_svc.get_status()
+    } else {
+        Err("Git not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+fn get_git_diff(file_path: String, state: State<AppState>) -> Result<git::GitDiff, String> {
+    let git_guard = state.git.lock().unwrap();
+    if let Some(git_svc) = git_guard.as_ref() {
+        git_svc.get_diff(&file_path)
+    } else {
+        Err("Git not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+fn get_current_branch(state: State<AppState>) -> Result<String, String> {
+    let git_guard = state.git.lock().unwrap();
+    if let Some(git_svc) = git_guard.as_ref() {
+        git_svc.get_current_branch()
+    } else {
+        Err("Git not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+fn get_branches(state: State<AppState>) -> Result<Vec<git::GitBranch>, String> {
+    let git_guard = state.git.lock().unwrap();
+    if let Some(git_svc) = git_guard.as_ref() {
+        git_svc.get_branches()
+    } else {
+        Err("Git not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+fn checkout_branch(branch_name: String, state: State<AppState>) -> Result<(), String> {
+    let git_guard = state.git.lock().unwrap();
+    if let Some(git_svc) = git_guard.as_ref() {
+        git_svc.checkout_branch(&branch_name)
+    } else {
+        Err("Git not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+fn create_branch(branch_name: String, state: State<AppState>) -> Result<(), String> {
+    let git_guard = state.git.lock().unwrap();
+    if let Some(git_svc) = git_guard.as_ref() {
+        git_svc.create_branch(&branch_name)
+    } else {
+        Err("Git not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+fn stage_file(file_path: String, state: State<AppState>) -> Result<(), String> {
+    let git_guard = state.git.lock().unwrap();
+    if let Some(git_svc) = git_guard.as_ref() {
+        git_svc.stage_file(&file_path)
+    } else {
+        Err("Git not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+fn unstage_file(file_path: String, state: State<AppState>) -> Result<(), String> {
+    let git_guard = state.git.lock().unwrap();
+    if let Some(git_svc) = git_guard.as_ref() {
+        git_svc.unstage_file(&file_path)
+    } else {
+        Err("Git not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+fn stage_all(state: State<AppState>) -> Result<(), String> {
+    let git_guard = state.git.lock().unwrap();
+    if let Some(git_svc) = git_guard.as_ref() {
+        git_svc.stage_all()
+    } else {
+        Err("Git not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+fn commit(message: String, state: State<AppState>) -> Result<(), String> {
+    let git_guard = state.git.lock().unwrap();
+    if let Some(git_svc) = git_guard.as_ref() {
+        git_svc.commit(&message)
+    } else {
+        Err("Git not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+fn get_git_diff_stats(state: State<AppState>) -> Result<Vec<git::GitFile>, String> {
+    let git_guard = state.git.lock().unwrap();
+    if let Some(git_svc) = git_guard.as_ref() {
+        git_svc.get_diff_stats()
+    } else {
+        Err("Git not initialized".to_string())
+    }
+}
+
 // ── App setup ──
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let project_dir = std::env::current_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| ".".to_string());
+    // Try E:\dev\branchcode-test first, fallback to current directory
+    let project_dir = if std::path::Path::new("E:\\dev\\branchcode-test").exists() {
+        "E:\\dev\\branchcode-test".to_string()
+    } else {
+        std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| ".".to_string())
+    };
 
-    println!("CWD: {}", project_dir);
+    println!("Project directory: {}", project_dir);
 
     let port = 4096;
 
     // Start opencode serve
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    let _server = rt.block_on(server::OpenCodeServer::start(port));
+    let _server = rt.block_on(server::OpenCodeServer::start(port, &project_dir));
 
     match &_server {
         Ok(s) => println!("OpenCode server running on port {}", s.port()),
@@ -165,10 +294,21 @@ pub fn run() {
 
     let client = Arc::new(opencode_client::OpenCodeClient::new(format!("http://127.0.0.1:{}", port)));
 
+    // Initialize git service
+    let git_service = git::GitService::new(project_dir.clone());
+    let git_initialized = git_service.is_git_repo();
+    
+    if git_initialized {
+        println!("Git repository detected at {}", project_dir);
+    } else {
+        println!("Not a git repository: {}", project_dir);
+    }
+
     let state = AppState {
         client,
         project_dir,
         model: std::sync::Mutex::new(String::new()),
+        git: std::sync::Mutex::new(Some(git_service)),
     };
 
     tauri::Builder::default()
@@ -187,6 +327,19 @@ pub fn run() {
             list_directory,
             find_files,
             get_model_info,
+            get_providers,
+            get_available_models,
+            get_git_status,
+            get_git_diff,
+            get_current_branch,
+            get_branches,
+            checkout_branch,
+            create_branch,
+            stage_file,
+            unstage_file,
+            stage_all,
+            commit,
+            get_git_diff_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

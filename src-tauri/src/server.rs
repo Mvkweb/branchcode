@@ -8,15 +8,16 @@ pub struct OpenCodeServer {
 }
 
 impl OpenCodeServer {
-    pub async fn start(port: u16) -> Result<Self, String> {
+    pub async fn start(port: u16, work_dir: &str) -> Result<Self, String> {
         if Self::is_healthy(port).await {
             println!("OpenCode server already running on port {}", port);
             return Ok(Self { process: None, port });
         }
 
-        println!("Starting OpenCode server on port {}...", port);
+        println!("Starting OpenCode server on port {} in {}...", port, work_dir);
         let process = Command::new("opencode")
             .args(["serve", "--port", &port.to_string()])
+            .current_dir(work_dir)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()

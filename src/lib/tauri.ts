@@ -133,6 +133,98 @@ export interface ModelInfo {
   };
 }
 
+export interface ProviderInfo {
+  id: string;
+  name: string;
+  models?: Record<string, ModelInfo>;
+}
+
 export async function getModelInfo(providerId: string, modelId: string): Promise<ModelInfo> {
   return invoke('get_model_info', { providerId, modelId });
+}
+
+export async function getProviders(): Promise<{ all: ProviderInfo[]; default: Record<string, string> }> {
+  return invoke('get_providers');
+}
+
+export async function getAvailableModels(): Promise<string[]> {
+  return invoke('get_available_models');
+}
+
+// ── Git Types ──
+
+export interface GitStatus {
+  branch: string;
+  staged: GitFile[];
+  modified: GitFile[];
+  untracked: GitFile[];
+  is_repo: boolean;
+}
+
+export interface GitFile {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+}
+
+export interface GitDiff {
+  path: string;
+  old_content: string | null;
+  new_content: string | null;
+  diff: string;
+  additions: number;
+  deletions: number;
+}
+
+export interface GitBranch {
+  name: string;
+  is_current: boolean;
+  is_remote: boolean;
+}
+
+// ── Git Commands ──
+
+export async function getGitStatus(): Promise<GitStatus> {
+  return invoke('get_git_status');
+}
+
+export async function getGitDiff(filePath: string): Promise<GitDiff> {
+  return invoke('get_git_diff', { filePath });
+}
+
+export async function getCurrentBranch(): Promise<string> {
+  return invoke('get_current_branch');
+}
+
+export async function getBranches(): Promise<GitBranch[]> {
+  return invoke('get_branches');
+}
+
+export async function checkoutBranch(branchName: string): Promise<void> {
+  return invoke('checkout_branch', { branchName });
+}
+
+export async function createBranch(branchName: string): Promise<void> {
+  return invoke('create_branch', { branchName });
+}
+
+export async function stageFile(filePath: string): Promise<void> {
+  return invoke('stage_file', { filePath });
+}
+
+export async function unstageFile(filePath: string): Promise<void> {
+  return invoke('unstage_file', { filePath });
+}
+
+export async function stageAll(): Promise<void> {
+  return invoke('stage_all');
+}
+
+export async function commit(message: string): Promise<void> {
+  return invoke('commit', { message });
+}
+
+export async function getGitDiffStats(): Promise<GitFile[]> {
+  return invoke('get_git_diff_stats');
 }

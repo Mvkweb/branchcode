@@ -34,7 +34,7 @@ pub struct OcToolState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OcPart {
     #[serde(rename = "type")]
-    pub part_type: String,
+    pub part_type: Option<String>,
     pub text: Option<String>,
     pub content: Option<String>,
 
@@ -56,6 +56,11 @@ impl OcPart {
     fn normalize(mut self) -> Self {
         if self.text.is_none() {
             self.text = self.content.clone();
+        }
+        
+        // Handle case where type might be under a different field or missing
+        if self.part_type.is_none() {
+            // Try to infer from other fields
         }
 
         if let Some(state) = &self.state {
@@ -137,6 +142,39 @@ impl OpenCodeClient {
         }
     }
 
+    pub async fn get_available_free_models(&self) -> Result<Vec<String>, String> {
+        let resp = self
+            .client
+            .get("https://opencode.ai/zen/v1/models")
+            .timeout(Duration::from_secs(8))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to fetch zen models: {}", e))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("Zen API returned status: {}", resp.status()));
+        }
+
+        let data: Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse zen models: {}", e))?;
+
+        let models: Vec<String> = data
+            .get("data")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|m| m.get("id").and_then(|v| v.as_str()))
+                    .filter(|id| id.ends_with("-free"))
+                    .map(|s| s.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(models)
+    }
+
     pub async fn list_sessions(&self) -> Result<Vec<OcSession>, String> {
         let resp = self
             .client
@@ -195,10 +233,15 @@ impl OpenCodeClient {
             .await
             .map_err(|e| format!("Failed to parse messages: {}", e))?;
 
-        println!("Raw messages response: {}", serde_json::to_string_pretty(&raw).unwrap_or_default());
+        println!("Raw messages response: {}", serde_json::to_string_pretty(&raw).unwrap_or_default().chars().take(2000).collect::<String>());
 
         let messages: Vec<OcMessageResponse> = serde_json::from_value(raw.clone())
             .map_err(|e| format!("Failed to deserialize messages: {}\nRaw: {}", e, &raw.to_string().chars().take(500).collect::<String>()))?;
+        
+        // Log first message part types for debugging
+        if let Some(first) = messages.first() {
+            println!("First message parts: {:?}", first.parts.iter().map(|p| (&p.part_type, &p.text)).collect::<Vec<_>>());
+        }
 
         Ok(messages.into_iter().map(OcMessageResponse::normalize).collect())
     }
@@ -288,6 +331,8 @@ impl OpenCodeClient {
             }
         };
 
+        // Give SSE stream time to send trailing events
+        tokio::time::sleep(Duration::from_millis(200)).await;
         sse_handle.abort();
 
         Ok(full_text)
@@ -312,6 +357,43 @@ impl OpenCodeClient {
             .or_else(|| part.get("textDelta").and_then(|v| v.as_str()).map(|s| s.to_string()))
             .or_else(|| part.get("text").and_then(|v| v.as_str()).map(|s| s.to_string()))
             .or_else(|| part.get("content").and_then(|v| v.as_str()).map(|s| s.to_string()))
+    }
+
+    fn part_type_from_value(v: &Value) -> Option<String> {
+        v.get("type")
+            .or_else(|| v.get("partType"))
+            .or_else(|| v.get("part_type"))
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_lowercase())
+    }
+
+    fn is_reasoning_type(t: &str) -> bool {
+        matches!(t, "reasoning" | "thinking" | "thought")
+    }
+
+    fn get_str<'a>(v: &'a Value, keys: &[&str]) -> Option<&'a str> {
+        for key in keys {
+            if let Some(s) = v.get(*key).and_then(|x| x.as_str()) {
+                return Some(s);
+            }
+        }
+        None
+    }
+
+    fn get_message_id(v: &Value) -> Option<String> {
+        Self::get_str(v, &["id", "messageID", "messageId", "message_id"])
+            .map(|s| s.to_string())
+    }
+
+    fn get_part_id(v: &Value) -> Option<String> {
+        Self::get_str(v, &["id", "partID", "partId", "part_id"])
+            .map(|s| s.to_string())
+    }
+
+    fn get_role(v: &Value) -> Option<String> {
+        v.get("role")
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_lowercase())
     }
 
     async fn stream_events(
@@ -341,6 +423,11 @@ impl OpenCodeClient {
         let mut accumulated_reasoning = String::new();
         let mut last_tokens: Option<Value> = None;
         let mut last_cost: Option<f64> = None;
+        let mut delta_parts: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut part_types: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut message_roles: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let part_message_ids: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut assistant_message_id: Option<String> = None;
 
         while let Some(chunk_result) = stream.next().await {
             let chunk = match chunk_result {
@@ -383,8 +470,25 @@ impl OpenCodeClient {
                 }
 
                 match event_type {
-                    "message.updated" => {
-                        let info = props.get("info").cloned().unwrap_or(Value::Null);
+                    "message.updated" | "message.added" => {
+                        let info = props
+                            .get("info")
+                            .or_else(|| props.get("message"))
+                            .cloned()
+                            .unwrap_or(Value::Null);
+
+                        if let (Some(msg_id), Some(role)) = (
+                            Self::get_message_id(&info),
+                            Self::get_role(&info),
+                        ) {
+                            if role == "user" {
+                                // Track the user message ID so we can skip its parts
+                            } else if role == "assistant" {
+                                assistant_message_id = Some(msg_id.clone());
+                            }
+                            message_roles.insert(msg_id, role);
+                        }
+
                         let tokens = info.get("tokens").cloned();
                         let cost = info.get("cost").and_then(|v| v.as_f64());
 
@@ -398,28 +502,120 @@ impl OpenCodeClient {
                         }
                     }
                     "message.part.delta" => {
-                        let field = props.get("field").and_then(|v| v.as_str()).unwrap_or("");
+                        // Skip deltas until we've identified the assistant message
+                        if assistant_message_id.is_none() {
+                            continue;
+                        }
+
+                        let field = props.get("field").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+                        let part = props.get("part").cloned().unwrap_or(Value::Null);
+
+                        let part_id = Self::get_str(&props, &["partID", "partId", "part_id"])
+                            .map(|s| s.to_string())
+                            .or_else(|| Self::get_part_id(&part))
+                            .unwrap_or_default();
+
+                        let message_id = Self::get_str(&props, &["messageID", "messageId", "message_id"])
+                            .map(|s| s.to_string())
+                            .or_else(|| {
+                                if part_id.is_empty() {
+                                    None
+                                } else {
+                                    part_message_ids.get(&part_id).cloned()
+                                }
+                            })
+                            .or_else(|| {
+                                props.get("message")
+                                    .and_then(Self::get_message_id)
+                            })
+                            .or_else(|| {
+                                part.get("message")
+                                    .and_then(Self::get_message_id)
+                            });
+
+                        // Skip deltas until we've identified the assistant message
+                        if assistant_message_id.is_none() {
+                            continue;
+                        }
+
+                        // Ignore non-assistant messages
+                        if let Some(mid) = &message_id {
+                            if let Some(active_mid) = &assistant_message_id {
+                                if mid != active_mid {
+                                    continue;
+                                }
+                            } else if let Some(role) = message_roles.get(mid) {
+                                if role != "assistant" {
+                                    continue;
+                                }
+                            }
+                        }
+
+                        // Get part type from delta props, tracked types, or part object
+                        let part_type = props.get("partType")
+                            .or_else(|| props.get("part_type"))
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_lowercase())
+                            .or_else(|| Self::part_type_from_value(&part))
+                            .or_else(|| {
+                                if part_id.is_empty() {
+                                    None
+                                } else {
+                                    part_types.get(&part_id).cloned()
+                                }
+                            })
+                            .unwrap_or_default();
+
                         let delta = props.get("delta").and_then(Self::value_to_string);
+                        
+                        if !part_id.is_empty() {
+                            delta_parts.insert(part_id.clone());
+                        }
 
                         if let Some(d) = delta {
-                            match field {
-                                "text" => {
-                                    accumulated_text.push_str(&d);
-                                    let _ = channel.send(OcStreamEvent::Token { token: d });
-                                }
-                                "reasoning" => {
-                                    accumulated_reasoning.push_str(&d);
-                                    let _ = channel.send(OcStreamEvent::Reasoning { text: d });
-                                }
-                                _ => {}
+                            let is_reasoning = Self::is_reasoning_type(&part_type)
+                                || matches!(field.as_str(), "reasoning" | "thinking" | "thought");
+
+                            if is_reasoning {
+                                accumulated_reasoning.push_str(&d);
+                                let _ = channel.send(OcStreamEvent::Reasoning { text: d });
+                            } else {
+                                accumulated_text.push_str(&d);
+                                let _ = channel.send(OcStreamEvent::Token { token: d });
                             }
                         }
                     }
                     "message.part.updated" | "message.part.added" => {
                         let part = props.get("part").cloned().unwrap_or(Value::Null);
-                        let delta = Self::extract_delta(&props, &part);
+                        let part_type = Self::part_type_from_value(&part).unwrap_or_default();
+                        let part_id = part.get("id").and_then(|v| v.as_str()).unwrap_or("");
 
-                        let part_type = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                        let message_id = Self::get_str(&props, &["messageID", "messageId", "message_id"])
+                            .map(|s| s.to_string())
+                            .or_else(|| {
+                                part.get("message")
+                                    .and_then(Self::get_message_id)
+                            });
+
+                        // Skip parts until we've identified the assistant message
+                        if let Some(mid) = &message_id {
+                            if assistant_message_id.is_none() {
+                                continue;
+                            }
+                            if let Some(active_mid) = &assistant_message_id {
+                                if mid != active_mid {
+                                    continue;
+                                }
+                            }
+                        } else if assistant_message_id.is_none() {
+                            continue;
+                        }
+
+                        // Track part types for delta classification
+                        if !part_id.is_empty() && !part_type.is_empty() {
+                            part_types.insert(part_id.to_string(), part_type.clone());
+                        }
+
                         let tool_name = part
                             .get("tool")
                             .or_else(|| part.get("name"))
@@ -427,19 +623,35 @@ impl OpenCodeClient {
                         let state = part.get("state").cloned().unwrap_or(Value::Null);
                         let state_status = state.get("status").and_then(|v| v.as_str()).unwrap_or("");
 
-                        match part_type {
+                        match part_type.as_str() {
                             "text" => {
-                                if let Some(d) = delta {
-                                    let _ = channel.send(OcStreamEvent::Token {
-                                        token: d.to_string(),
-                                    });
+                                // Only send text from part.updated if delta didn't fire
+                                if !delta_parts.contains(part_id) {
+                                    let text = part.get("text").and_then(|v| v.as_str())
+                                        .or_else(|| part.get("content").and_then(|v| v.as_str()));
+                                    if let Some(d) = text {
+                                        if !d.is_empty() {
+                                            accumulated_text.push_str(d);
+                                            let _ = channel.send(OcStreamEvent::Token {
+                                                token: d.to_string(),
+                                            });
+                                        }
+                                    }
                                 }
                             }
-                            "reasoning" => {
-                                if let Some(d) = delta {
-                                    let _ = channel.send(OcStreamEvent::Reasoning {
-                                        text: d.to_string(),
-                                    });
+                            "reasoning" | "thinking" | "thought" => {
+                                // Only send reasoning from part.updated if delta didn't fire
+                                if !delta_parts.contains(part_id) {
+                                    let text = part.get("text").and_then(|v| v.as_str())
+                                        .or_else(|| part.get("content").and_then(|v| v.as_str()));
+                                    if let Some(d) = text {
+                                        if !d.is_empty() {
+                                            accumulated_reasoning.push_str(d);
+                                            let _ = channel.send(OcStreamEvent::Reasoning {
+                                                text: d.to_string(),
+                                            });
+                                        }
+                                    }
                                 }
                             }
                             "tool" => {
@@ -456,10 +668,10 @@ impl OpenCodeClient {
                                     let _ = channel.send(OcStreamEvent::ToolCall {
                                         name: name.to_string(),
                                         input: input_str,
-                                        status,
+                                        status: status.clone(),
                                     });
 
-                                    if state_status == "completed" {
+                                    if status == "completed" {
                                         let output = state
                                             .get("output")
                                             .map(|v| {
@@ -618,5 +830,18 @@ impl OpenCodeClient {
         resp.json()
             .await
             .map_err(|e| format!("Failed to parse model info: {}", e))
+    }
+
+    pub async fn get_providers(&self) -> Result<Value, String> {
+        let resp = self
+            .client
+            .get(&format!("{}/provider", self.base_url))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to get providers: {}", e))?;
+
+        resp.json()
+            .await
+            .map_err(|e| format!("Failed to parse providers: {}", e))
     }
 }

@@ -1,11 +1,10 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Plus,
   Zap,
   Folder,
   SquareTerminal,
-  Bug,
   Image as ImageIcon,
   ChevronDown,
   FolderOpen,
@@ -21,12 +20,18 @@ import {
   Layers,
   ArrowUp,
   Square,
+  Star,
+  Search,
 } from 'lucide-react';
 import { useChat } from '../hooks/useChat';
 import { useSessions } from '../hooks/useSessions';
 import { useFileTree } from '../hooks/useFileTree';
-import { ChatMessages } from './ChatMessages';
-import { getConfig, setModel, getModelInfo, type ConfigInfo } from '../lib/tauri';
+import { useGit } from '../hooks/useGit';
+import { SettingsModal } from './Settings';
+import { ChatMessages, MessagePlaceholder } from './ChatMessages';
+import { GitPanel } from './GitPanel';
+import { useVirtualMessages } from '../hooks/useVirtualScroll';
+import { getConfig, setModel, getModelInfo, getProviders, getAvailableModels, type ConfigInfo, type ProviderInfo } from '../lib/tauri';
 
 // ── Logo ──
 
@@ -45,6 +50,88 @@ const ModelSvgIcon = ({ className }: { className?: string }) => (
     <path fillRule="evenodd" clipRule="evenodd" d="M384 416H128V96H384V416ZM320 160H192V352H320V160Z" fill="white"/>
   </svg>
 );
+
+const McpIcon = ({ className, size = 16 }: { className?: string; size?: number }) => (
+  <svg fill="currentColor" fillRule="evenodd" style={{ flex: 'none', lineHeight: 1 }} viewBox="0 0 24 24" className={className} width={size} height={size}>
+    <title>ModelContextProtocol</title>
+    <path d="M15.688 2.343a2.588 2.588 0 00-3.61 0l-9.626 9.44a.863.863 0 01-1.203 0 .823.823 0 010-1.18l9.626-9.44a4.313 4.313 0 016.016 0 4.116 4.116 0 011.204 3.54 4.3 4.3 0 013.609 1.18l.05.05a4.115 4.115 0 010 5.9l-8.706 8.537a.274.274 0 000 .393l1.788 1.754a.823.823 0 010 1.18.863.863 0 01-1.203 0l-1.788-1.753a1.92 1.92 0 010-2.754l8.706-8.538a2.47 2.47 0 000-3.54l-.05-.049a2.588 2.588 0 00-3.607-.003l-7.172 7.034-.002.002-.098.097a.863.863 0 01-1.204 0 .823.823 0 010-1.18l7.273-7.133a2.47 2.47 0 00-.003-3.537z" />
+    <path d="M14.485 4.703a.823.823 0 000-1.18.863.863 0 00-1.204 0l-7.119 6.982a4.115 4.115 0 000 5.9 4.314 4.314 0 006.016 0l7.12-6.982a.823.823 0 000-1.18.863.863 0 00-1.204 0l-7.119 6.982a2.588 2.588 0 01-3.61 0 2.47 2.47 0 010-3.54l7.12-6.982z" />
+  </svg>
+);
+
+const PlanIcon = ({ className, size = 16 }: { className?: string; size?: number }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <rect x="3" y="5" width="6" height="6" rx="1" />
+    <path d="m3 17 2 2 4-4" />
+    <path d="M13 6h8" />
+    <path d="M13 12h8" />
+    <path d="M13 18h8" />
+  </svg>
+);
+
+const BuildIcon = ({ className, size = 16 }: { className?: string; size?: number }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <path d="M15 12l-8.5 8.5c-.8.8-2.1.8-2.8 0-.8-.8-.8-2.1 0-2.8L12 9" />
+    <path d="M17.6 4.4L15 7l-2.6-2.6a2.1 2.1 0 0 1 0-3 2.1 2.1 0 0 1 3 0l2.2 2.2a2.1 2.1 0 0 1 0 3z" />
+    <path d="m15 7 2.6 2.6" />
+  </svg>
+);
+
+function ModeSelector() {
+  const [mode, setMode] = useState<'plan' | 'build'>('build');
+  const [hovered, setHovered] = useState(false);
+
+  const showPlan = hovered || mode === 'plan';
+  const showBuild = hovered || mode === 'build';
+
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      className="flex items-center bg-[#1a1a1a] border border-[#2a2a2a] hover:border-[#444] rounded-lg transition-colors overflow-hidden h-[26px] shadow-sm select-none"
+    >
+      <motion.button
+        initial={false}
+        animate={{
+          width: showPlan ? 60 : 0,
+          opacity: showPlan ? 1 : 0,
+        }}
+        transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+        onClick={() => setMode('plan')}
+        className={`relative flex items-center justify-center h-full transition-colors overflow-hidden ${
+          mode === 'plan' 
+            ? (hovered ? 'bg-[#2a2a2a] text-white' : 'text-neutral-200') 
+            : 'text-neutral-500 hover:text-white hover:bg-[#252525]'
+        }`}
+      >
+        <div className="absolute inset-0 flex items-center justify-center gap-1.5 w-[60px]">
+          <PlanIcon size={13} className={`flex-shrink-0 transition-colors ${mode === 'plan' && !hovered ? 'text-neutral-400' : ''}`} />
+          <span className="text-[12px] font-medium">Plan</span>
+        </div>
+      </motion.button>
+
+      <motion.button
+        initial={false}
+        animate={{
+          width: showBuild ? 62 : 0,
+          opacity: showBuild ? 1 : 0,
+        }}
+        transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+        onClick={() => setMode('build')}
+        className={`relative flex items-center justify-center h-full transition-colors overflow-hidden ${
+          mode === 'build' 
+            ? (hovered ? 'bg-[#2a2a2a] text-white' : 'text-neutral-200') 
+            : 'text-neutral-500 hover:text-white hover:bg-[#252525]'
+        }`}
+      >
+        <div className="absolute inset-0 flex items-center justify-center gap-1.5 w-[62px]">
+          <BuildIcon size={13} className={`flex-shrink-0 transition-colors ${mode === 'build' && !hovered ? 'text-neutral-400' : ''}`} />
+          <span className="text-[12px] font-medium">Build</span>
+        </div>
+      </motion.button>
+    </div>
+  );
+}
 
 // ── Context Ring ──
 
@@ -140,19 +227,16 @@ function ContextUsage({
 
 // ── Constants ──
 
-const FREE_MODELS = [
-  { id: 'opencode/mimo-v2-pro-free', label: 'MiMo V2 Pro', desc: 'Xiaomi' },
-  { id: 'opencode/mimo-v2-omni-free', label: 'MiMo V2 Omni', desc: 'Multimodal' },
-  { id: 'opencode/big-pickle', label: 'Big Pickle', desc: 'Stealth' },
-  { id: 'opencode/qwen3.6-plus-free', label: 'Qwen3.6 Plus', desc: 'Alibaba' },
-  { id: 'opencode/nemotron-3-super-free', label: 'Nemotron 3 Super', desc: 'NVIDIA' },
-  { id: 'opencode/minimax-m2.5-free', label: 'MiniMax M2.5', desc: 'MiniMax' },
-];
+let providersCache: { all: ProviderInfo[] } | null = null;
 
 function getModelLabel(id?: string | null) {
   if (!id) return null;
-  const found = FREE_MODELS.find((m) => m.id === id);
-  return found ? found.label : id.split('/').pop() || id;
+  if (providersCache) {
+    for (const p of providersCache.all) {
+      if (p.models && p.models[id]) return p.models[id].name || id;
+    }
+  }
+  return id.split('/').pop() || id;
 }
 
 // ── Sidebar Item ──
@@ -239,14 +323,46 @@ function SuggestionCard({
 
 function ModelDropdown({
   config,
+  providers,
+  availableModels,
   onChanged,
 }: {
   config: ConfigInfo | null;
+  providers: ProviderInfo[];
+  availableModels?: string[];
   onChanged: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
   const ref = useRef<HTMLDivElement>(null);
+
+  const flattenedModels = useMemo(() => {
+    const list: { id: string; label: string; desc: string; context: string; priceIn: string; priceOut: string; isFree: boolean }[] = [];
+    const freeSet = new Set(availableModels || []);
+    providers.forEach(p => {
+      Object.entries(p.models || {}).forEach(([mId, m]) => {
+        const bareId = mId.includes('/') ? mId.split('/')[1]! : mId;
+        const isFree = freeSet.size > 0 
+          ? freeSet.has(bareId) 
+          : ((m.cost?.input === 0 && m.cost?.output === 0) || mId.endsWith('-free'));
+        const priceIn = m.cost?.input !== undefined ? `$${m.cost.input}` : '$0.00';
+        const priceOut = m.cost?.output !== undefined ? `$${m.cost.output}` : '$0.00';
+        const context = m.limit?.context ? `${Math.floor(m.limit.context / 1000)}K` : '128K';
+        
+        list.push({
+          id: mId,
+          label: m.name || mId,
+          desc: p.name || p.id,
+          context,
+          priceIn,
+          priceOut,
+          isFree,
+        });
+      });
+    });
+    return list;
+  }, [providers]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -292,25 +408,54 @@ function ModelDropdown({
             style={{ transformOrigin: 'bottom left' }}
             className="absolute bottom-full mb-2 left-0 w-[260px] bg-[#111] border border-[#262626] rounded-xl shadow-2xl shadow-black/50 overflow-hidden z-50 flex flex-col p-1.5"
           >
-            {/* Provider Section */}
-            <div className="flex flex-col gap-0.5">
-              <button className="w-full flex items-center justify-between px-2 py-2 rounded-lg bg-[#1a1a1a] text-neutral-200 transition-colors">
-                <div className="flex items-center gap-3">
-                  <div className="w-7 h-7 rounded-md flex items-center justify-center overflow-hidden">
-                    <ModelSvgIcon className="w-7 h-7" />
-                  </div>
-                  <span className="text-[14px] font-medium text-neutral-100">Opencode</span>
-                </div>
-                <Check size={16} className="text-neutral-300" />
-              </button>
+            {/* Search Input */}
+            <div className="p-1 px-1.5 border-b border-[#262626] mb-1">
+              <div className="relative">
+                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-500" />
+                <input
+                  type="text"
+                  placeholder="Search models"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="w-full bg-transparent border-none pl-8 pr-3 py-1.5 text-[13px] font-medium text-white placeholder-neutral-500 focus:outline-none focus:ring-1 focus:ring-[#3a3a3a] rounded bg-[#111] hover:bg-[#151515] focus:bg-[#1a1a1a] transition-colors"
+                  onClick={(e) => e.stopPropagation()}
+                />
+              </div>
             </div>
 
-            <div className="h-px bg-[#262626] mx-2 my-2" />
+            {/* Provider Section */}
+            <div className="flex flex-col gap-0.5 px-1.5 pb-1">
+              <div className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-[#1a1a1a] text-neutral-200 transition-colors cursor-pointer">
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 rounded-[4px] flex items-center justify-center overflow-hidden bg-[#2a2a2a] flex-shrink-0">
+                    <ModelSvgIcon className="w-3 h-3 text-white" />
+                  </div>
+                  <span className="text-[13px] font-medium text-neutral-100">Opencode</span>
+                </div>
+              </div>
+              <div className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg hover:bg-[#1a1a1a] text-neutral-400 hover:text-neutral-200 transition-colors cursor-pointer">
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 flex items-center justify-center -ml-0.5">
+                    <Plus size={14} />
+                  </div>
+                  <span className="text-[13px] font-medium">Add new provider</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 px-3 py-1.5 mt-1 border-t border-[#262626]">
+              <div className="w-3.5 h-3.5 rounded-sm flex items-center justify-center overflow-hidden">
+                <ModelSvgIcon className="w-3.5 h-3.5" />
+              </div>
+              <span className="text-[11px] font-bold text-neutral-500 tracking-widest leading-none">RECENT</span>
+            </div>
 
             {/* Model Section */}
-            <div className="px-2 py-1 text-[12px] font-medium text-neutral-500 mb-1">Model</div>
-            <div className="flex flex-col gap-0.5 max-h-[240px] overflow-y-auto custom-scrollbar">
-              {FREE_MODELS.map((m) => {
+            <div className="flex flex-col gap-0.5 px-1 mt-0.5 pb-1 max-h-[260px] overflow-y-auto custom-scrollbar">
+              {flattenedModels.filter((m: any) => m.isFree).filter((m: any) => {
+                const q = search.toLowerCase();
+                return m.label.toLowerCase().includes(q) || m.id.toLowerCase().includes(q) || m.desc.toLowerCase().includes(q);
+              }).map((m) => {
                 const active = config?.model === m.id;
                 const isSaving = saving === m.id;
                 return (
@@ -318,13 +463,31 @@ function ModelDropdown({
                     key={m.id}
                     onClick={() => pick(m.id)}
                     disabled={!!saving}
-                    className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-left transition-colors
-                      ${active ? 'bg-[#1a1a1a] text-neutral-200' : 'text-neutral-300 hover:bg-[#1a1a1a] hover:text-neutral-200'}
+                    className={`w-full group relative flex items-center justify-between px-2 py-1.5 rounded-md text-left transition-colors
+                      ${active ? 'bg-[#2a2a2a] text-neutral-100' : 'text-neutral-300 hover:bg-[#202020] hover:text-neutral-200'}
                       ${saving && !isSaving ? 'opacity-40' : ''}`}
                   >
-                    <span className="text-[14px] truncate">{m.label}</span>
-                    {isSaving && <Loader2 size={16} className="animate-spin text-neutral-400" />}
-                    {active && !isSaving && <Check size={16} className="text-neutral-300" />}
+                    <div className="flex items-center gap-1.5 min-w-0 pr-4 flex-1">
+                      <div className="w-4 h-4 rounded-[4px] flex items-center justify-center overflow-hidden bg-[#2a2a2a] flex-shrink-0">
+                         <ModelSvgIcon className="w-3 h-3 text-white" />
+                      </div>
+                      <span className="text-[13px] font-medium truncate leading-none">{m.label}</span>
+                      <span className="text-[11px] text-neutral-500 font-medium flex-shrink-0 leading-none">{m.context}</span>
+                    </div>
+
+                    <div className="flex items-center flex-shrink-0 shrink-0 h-[16px]">
+                      <div className="hidden group-hover:flex items-center transition-opacity whitespace-nowrap text-[11px] text-neutral-500 mr-2.5">
+                        In {m.priceIn} • Out {m.priceOut}
+                      </div>
+                      <div className="w-4 h-4 flex items-center justify-center">
+                        {isSaving ? (
+                          <Loader2 size={13} className="animate-spin text-[#e87f39]" />
+                        ) : active ? (
+                          <Check size={14} className="text-[#e87f39]" strokeWidth={2.5} />
+                        ) : null}
+                      </div>
+                      <Star size={13} strokeWidth={2} className="ml-1 text-neutral-600 hover:text-neutral-300 transition-colors hidden group-hover:block" />
+                    </div>
                   </button>
                 );
               })}
@@ -340,12 +503,43 @@ function ModelDropdown({
 
 function InlineModelPicker({
   config,
+  providers,
+  availableModels,
   onChanged,
 }: {
   config: ConfigInfo | null;
+  providers: ProviderInfo[];
+  availableModels?: string[];
   onChanged: () => void;
 }) {
   const [saving, setSaving] = useState<string | null>(null);
+
+  const flattenedModels = useMemo(() => {
+    const list: { id: string; label: string; desc: string; context: string; priceIn: string; priceOut: string; isFree: boolean }[] = [];
+    const freeSet = new Set(availableModels || []);
+    providers.forEach(p => {
+      Object.entries(p.models || {}).forEach(([mId, m]) => {
+        const bareId = mId.includes('/') ? mId.split('/')[1]! : mId;
+        const isFree = freeSet.size > 0 
+          ? freeSet.has(bareId) 
+          : ((m.cost?.input === 0 && m.cost?.output === 0) || mId.endsWith('-free'));
+        const priceIn = m.cost?.input !== undefined ? `$${m.cost.input}` : '$0.00';
+        const priceOut = m.cost?.output !== undefined ? `$${m.cost.output}` : '$0.00';
+        const context = m.limit?.context ? `${Math.floor(m.limit.context / 1000)}K` : '128K';
+        
+        list.push({
+          id: mId,
+          label: m.name || mId,
+          desc: p.name || p.id,
+          context,
+          priceIn,
+          priceOut,
+          isFree,
+        });
+      });
+    });
+    return list;
+  }, [providers]);
 
   const pick = async (id: string) => {
     setSaving(id);
@@ -366,7 +560,7 @@ function InlineModelPicker({
         {currentModel ? 'MODEL' : 'SELECT A MODEL'}
       </div>
       <div className="grid grid-cols-3 gap-2">
-        {FREE_MODELS.map((m) => {
+        {flattenedModels.filter((m: any) => m.isFree).slice(0, 6).map((m) => {
           const active = currentModel === m.id;
           const isSaving = saving === m.id;
           return (
@@ -381,13 +575,23 @@ function InlineModelPicker({
               } ${saving && !isSaving ? 'opacity-40' : ''}`}
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="text-[13px] font-medium text-neutral-200 truncate">
-                  {m.label}
-                </span>
+                <div className="flex items-center gap-2 overflow-hidden">
+                  <span className="text-[13px] font-medium text-neutral-200 truncate">
+                    {m.label}
+                  </span>
+                  <span className="text-[11px] text-neutral-600 flex-shrink-0">
+                    {m.context}
+                  </span>
+                </div>
                 {isSaving && <Loader2 size={12} className="animate-spin text-neutral-400 flex-shrink-0" />}
-                {active && !isSaving && <Check size={12} className="text-neutral-400 flex-shrink-0" />}
+                {active && !isSaving && <Check size={12} className="text-[#e87f39] flex-shrink-0" strokeWidth={2.5} /> }
               </div>
-              <div className="text-[11px] text-neutral-600 mt-0.5">{m.desc}</div>
+              <div className="text-[11px] text-neutral-600 mt-0.5 flex flex-wrap items-center justify-between">
+                <span>{m.desc}</span>
+                <span className="opacity-0 group-hover:opacity-100 transition-opacity">
+                  In {m.priceIn} • Out {m.priceOut}
+                </span>
+              </div>
             </button>
           );
         })}
@@ -418,6 +622,53 @@ function WorkingIndicator({ elapsed }: { elapsed: number }) {
   );
 }
 
+// ── Virtualized Chat (culled rendering) ──
+
+function VirtualizedChat({
+  messages,
+  messagesEndRef,
+  isLoading,
+}: {
+  messages: import('../hooks/useChat').Message[];
+  messagesEndRef: React.RefObject<HTMLDivElement | null>;
+  isLoading?: boolean;
+}) {
+  const { containerRef, observeElement, isVisible } = useVirtualMessages(messages, 10);
+
+  return (
+    <div ref={containerRef} className="flex-1 overflow-y-auto custom-scrollbar">
+      <div className="max-w-[780px] mx-auto w-full py-6 px-5 space-y-5">
+        {isLoading && messages.length === 0 ? (
+          // Skeleton while loading
+          <>
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="animate-pulse space-y-3">
+                <div className="h-4 bg-neutral-800 rounded w-16" />
+                <div className="h-4 bg-neutral-800 rounded w-3/4" />
+                <div className="h-4 bg-neutral-800 rounded w-1/2" />
+              </div>
+            ))}
+          </>
+        ) : (
+          messages.map((msg, idx) => (
+            <div
+              key={msg.id}
+              ref={(el) => { if (el) observeElement(el, msg.id); }}
+            >
+              {isVisible(idx) ? (
+                <ChatMessages message={msg} />
+              ) : (
+                <MessagePlaceholder message={msg} />
+              )}
+            </div>
+          ))
+        )}
+        <div ref={messagesEndRef} />
+      </div>
+    </div>
+  );
+}
+
 // ── Main App ──
 
 export default function App() {
@@ -425,8 +676,12 @@ export default function App() {
   const [isHovered, setIsHovered] = useState(false);
   const [input, setInput] = useState('');
   const [config, setConfig] = useState<ConfigInfo | null>(null);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [showFileTree, setShowFileTree] = useState(false);
+  const [showGitPanel, setShowGitPanel] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [showSettings, setShowSettings] = useState(false);
 
   const isVisible = isPinned || isHovered;
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -434,33 +689,67 @@ export default function App() {
   const bottomTextareaRef = useRef<HTMLTextAreaElement>(null);
   const suppressAutoLoadSessionRef = useRef<string | null>(null);
 
-  const { messages, isStreaming, status, send, loadMessages, clearMessages, getSessionUsage } = useChat();
+  const { messages, isStreaming, isLoading, status, send, loadMessages, clearMessages, getSessionUsage } = useChat();
   const { sessions, activeSessionId, createSession, deleteSession, selectSession, loadSessions } =
     useSessions();
   const { files, loadDirectory } = useFileTree();
+  const git = useGit(true, 5000);
   const [contextLimit, setContextLimit] = useState(200000);
 
   const loadConfig = useCallback(() => {
     getConfig().then(setConfig).catch(console.error);
+    getProviders()
+      .then((p) => {
+        providersCache = p;
+        setProviders(p.all);
+      })
+      .catch(console.error);
+    getAvailableModels()
+      .then(setAvailableModels)
+      .catch(console.error);
   }, []);
 
   useEffect(() => {
     loadConfig();
   }, [loadConfig]);
 
+  // Find context limit from providers cache, matching OpenChamber's calculation
+  const findContextLimit = useCallback((modelId: string): number => {
+    const pCache = providersCache;
+    if (!pCache) return 200000;
+
+    for (const provider of pCache.all) {
+      if (provider.models && provider.models[modelId]) {
+        const model = provider.models[modelId];
+        return model.limit?.context || 200000;
+      }
+    }
+    return 200000;
+  }, []);
+
   useEffect(() => {
     if (config?.model) {
       const parts = config.model.split('/');
       const providerId = parts.length > 1 ? parts[0]! : 'opencode';
       const modelId = parts.length > 1 ? parts[1]! : parts[0]!;
+
+      // Try providers first, then fallback to getModelInfo
+      const cachedLimit = findContextLimit(modelId);
+      if (cachedLimit !== 200000) {
+        setContextLimit(cachedLimit);
+        return;
+      }
+
       getModelInfo(providerId, modelId)
         .then((info) => {
           const limit = info.limit?.context;
-          if (limit && limit > 0) setContextLimit(limit);
+          setContextLimit(limit && limit > 0 ? limit : 200000);
         })
-        .catch(console.error);
+        .catch(() => {
+          setContextLimit(200000);
+        });
     }
-  }, [config?.model]);
+  }, [config?.model, findContextLimit]);
 
   useEffect(() => {
     if (config?.project_dir) loadDirectory(config.project_dir);
@@ -539,12 +828,17 @@ export default function App() {
   const hasMessages = messages.length > 0;
   const canSend = !!input.trim() && !isStreaming && !!config?.model;
   const usage = getSessionUsage();
-  const usagePercent = contextLimit > 0 ? Math.min(999, Math.round((usage.totalTokens / contextLimit) * 100)) : 0;
+  
+  // Calculate context usage percentage matching OpenCode native TUI
+  const usagePercent = contextLimit > 0 ? Math.min(100, Math.floor((usage.contextTokens / contextLimit) * 100)) : 0;
   const costStr = `$${usage.cost.toFixed(4)}`;
   const tokenStr = usage.totalTokens.toLocaleString();
 
   return (
     <div className="h-screen w-screen flex bg-[#0a0a0a] font-sans text-white overflow-hidden relative">
+      <AnimatePresence>
+        {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      </AnimatePresence>
       {/* Window Controls */}
       <div className="absolute top-0 left-0 h-12 flex items-center px-4 gap-2 z-40 pointer-events-none">
         <div className="w-3 h-3 rounded-full bg-[#ff5f56] pointer-events-auto cursor-pointer" />
@@ -695,7 +989,10 @@ export default function App() {
             <span className="text-neutral-600">v0.1.50</span>
           </div>
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3 cursor-pointer group hover:bg-[#1a1a1a] p-1.5 -ml-1.5 rounded-lg transition-colors">
+            <div 
+              onClick={() => setShowSettings(true)}
+              className="flex items-center gap-3 cursor-pointer group hover:bg-[#1a1a1a] p-1.5 -ml-1.5 rounded-lg transition-colors"
+            >
               <img
                 src="https://api.dicebear.com/7.x/avataaars/svg?seed=Paulius&backgroundColor=b6e3f4"
                 alt="Paulius"
@@ -706,7 +1003,7 @@ export default function App() {
               </span>
             </div>
             <button className="text-neutral-500 hover:text-neutral-300 transition-colors">
-              <Bug size={16} />
+              <McpIcon size={16} />
             </button>
           </div>
         </div>
@@ -752,7 +1049,15 @@ export default function App() {
               </div>
 
               {/* Inline Model Picker */}
-              <InlineModelPicker config={config} onChanged={loadConfig} />
+              <InlineModelPicker 
+                config={config} 
+                providers={providers}
+                availableModels={availableModels}
+                onChanged={() => {
+                  clearMessages();
+                  loadConfig();
+                }} 
+              />
 
               {/* Input */}
               <div className="w-full bg-[#111] border border-[#282828] rounded-2xl p-5 shadow-2xl shadow-black/30 focus-within:border-[#444] transition-colors">
@@ -774,7 +1079,12 @@ export default function App() {
                     <button className="text-neutral-500 hover:text-neutral-300 transition-colors p-1.5 rounded-lg hover:bg-[#222]">
                       <ImageIcon size={18} />
                     </button>
-                    <ModelDropdown config={config} onChanged={loadConfig} />
+                    <ModelDropdown 
+                      config={config} 
+                      providers={providers} 
+                      availableModels={availableModels}
+                      onChanged={loadConfig} 
+                    />
                     <div className="h-4 w-px bg-[#282828] mx-1" />
                     <button className="flex items-center gap-1.5 text-sm text-neutral-400 hover:text-neutral-200 transition-colors p-1.5 rounded-lg hover:bg-[#222]">
                       <CircleDashed size={16} className="text-[#e0443e]" />
@@ -833,14 +1143,7 @@ export default function App() {
         ) : (
           <>
             {/* ── Chat ── */}
-            <div className="flex-1 overflow-y-auto custom-scrollbar">
-              <div className="max-w-[780px] mx-auto w-full py-6 px-5 space-y-5">
-                {messages.map((msg) => (
-                  <ChatMessages key={msg.id} message={msg} />
-                ))}
-                <div ref={messagesEndRef} />
-              </div>
-            </div>
+            <VirtualizedChat messages={messages} messagesEndRef={messagesEndRef} isLoading={isLoading} />
 
             {/* Working status */}
             {isStreaming && <WorkingIndicator elapsed={elapsed} />}
@@ -862,7 +1165,12 @@ export default function App() {
 
                   <div className="flex items-center justify-between mt-2 pl-1">
                     <div className="flex items-center gap-2.5">
-                      <ModelDropdown config={config} onChanged={loadConfig} />
+                      <ModelDropdown 
+                        config={config} 
+                        providers={providers} 
+                        availableModels={availableModels}
+                        onChanged={loadConfig} 
+                      />
                       <button className="flex items-center gap-1 text-[13px] text-neutral-400 hover:text-neutral-200 transition-colors p-1 rounded-md hover:bg-[#222]">
                         <Zap size={14} />
                         Low
@@ -876,15 +1184,22 @@ export default function App() {
                         <ImageIcon size={16} />
                       </button>
                       <button className="text-neutral-500 hover:text-neutral-300 transition-colors p-1 rounded-md hover:bg-[#222]">
-                        <Bug size={16} />
+                        <McpIcon size={16} />
                       </button>
                       <button className="text-neutral-500 hover:text-neutral-300 transition-colors p-1 rounded-md hover:bg-[#222]">
                         <Layers size={16} />
                       </button>
                       <div className="h-3 w-px bg-[#2a2a2a]" />
-                      <button className="flex items-center gap-1.5 px-2 py-1 bg-[#1a1a1a] hover:bg-[#222] border border-[#2a2a2a] rounded-lg transition-colors group">
-                        <div className="w-2.5 h-2.5 bg-[#ff5f56] rounded-[3px] group-hover:shadow-[0_0_8px_rgba(255,95,86,0.4)] transition-shadow" />
-                        <span className="text-[12px] font-medium text-neutral-200">Clonk</span>
+                      <ModeSelector />
+                      <button 
+                        onClick={() => setShowGitPanel(!showGitPanel)}
+                        className={`flex items-center gap-1.5 text-[13px] transition-colors p-1 rounded-md ${
+                          showGitPanel 
+                            ? 'bg-[#222] text-neutral-200' 
+                            : 'text-neutral-500 hover:text-neutral-200 hover:bg-[#222]'
+                        }`}
+                      >
+                        <GitBranch size={14} />
                       </button>
                     </div>
 
@@ -910,9 +1225,12 @@ export default function App() {
                 {/* Footer bar */}
                 <div className="flex items-center justify-between mt-3 px-2">
                   <div className="flex items-center gap-4 text-[11px] text-neutral-500">
-                    <button className="flex items-center gap-1.5 hover:text-neutral-300 transition-colors">
+                    <button 
+                      onClick={() => setShowGitPanel(true)}
+                      className="flex items-center gap-1.5 hover:text-neutral-300 transition-colors"
+                    >
                       <GitBranch size={12} />
-                      master
+                      {git.currentBranch || 'main'}
                       <ChevronDown size={10} className="opacity-50" />
                     </button>
                     <button className="flex items-center gap-1.5 hover:text-neutral-300 transition-colors">
@@ -928,6 +1246,33 @@ export default function App() {
           </>
         )}
       </div>
+
+      {/* Git Panel - Right Sidebar */}
+      <AnimatePresence>
+        {showGitPanel && (
+          <motion.div
+            initial={{ width: 0, opacity: 0 }}
+            animate={{ width: 380, opacity: 1 }}
+            exit={{ width: 0, opacity: 0 }}
+            transition={{ type: 'spring', bounce: 0, duration: 0.25 }}
+            className="flex-shrink-0 h-full border-l border-[#1a1a1a]"
+          >
+            <GitPanel
+              status={git.status}
+              branches={git.branches}
+              currentBranch={git.currentBranch}
+              loading={git.loading}
+              onRefresh={git.refresh}
+              onStageFile={git.stageFile}
+              onUnstageFile={git.unstageFile}
+              onStageAll={git.stageAll}
+              onCommit={git.commit}
+              onCheckoutBranch={git.checkoutBranch}
+              onCreateBranch={git.createBranch}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

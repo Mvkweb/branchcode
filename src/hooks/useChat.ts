@@ -4,7 +4,6 @@ import {
   sendMessage as tauriSendMessage,
   getMessages,
   type StreamEvent,
-  type OcMessageResponse,
 } from '../lib/tauri';
 
 export interface Message {
@@ -27,18 +26,9 @@ export interface SessionUsage {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   totalTokens: number;
+  contextTokens: number; // input + cache for % calculation
   cost: number;
 }
-
-const stringifySafe = (value: unknown) => {
-  if (value == null) return '';
-  if (typeof value === 'string') return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-};
 
 const extractTokens = (tokens: unknown) => {
   if (!tokens) return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
@@ -56,9 +46,13 @@ const extractTokens = (tokens: unknown) => {
   return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
 };
 
+// Pagination: load last N messages first for fast initial render
+const PAGE_SIZE = 30;
+
 export function useChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const streamContentRef = useRef('');
   const reasoningRef = useRef('');
@@ -71,6 +65,7 @@ export function useChat() {
 
   const loadMessages = useCallback(async (sessionId: string) => {
     const requestId = ++loadRequestRef.current;
+    setIsLoading(true);
 
     try {
       const ocMessages = await getMessages(sessionId);
@@ -78,72 +73,83 @@ export function useChat() {
       if (requestId !== loadRequestRef.current) return;
       if (streamingSessionRef.current === sessionId) return;
 
-      const mapped: Message[] = ocMessages.map((m: OcMessageResponse) => {
+      // Fast path: map only the last PAGE_SIZE messages
+      const totalLen = ocMessages.length;
+      const startIdx = Math.max(0, totalLen - PAGE_SIZE);
+      
+      const mapped: Message[] = [];
+      
+      for (let i = startIdx; i < totalLen; i++) {
+        const m = ocMessages[i]!;
         const parts = (m.parts ?? []) as any[];
+        
+        let textContent = '';
+        let reasoningContent = '';
+        const toolCalls: { name: string; input: string; status: string }[] = [];
+        const toolResults: { name: string; output: string }[] = [];
+        const fileEdits: string[] = [];
 
-        const textParts = parts
-          .filter((p) => p.type === 'text')
-          .map((p) => p.text || p.content || '')
-          .join('');
+        for (const p of parts) {
+          // Handle various type field names and formats
+          const partType = (p.type || p.part_type || p.partType || '').toString().toLowerCase();
+          const textValue = p.text || p.content || p.text_content || '';
+          
+          if (partType === 'text') {
+            textContent += textValue;
+          } else if (partType === 'reasoning' || partType === 'thinking' || partType === 'thought') {
+            reasoningContent += textValue;
+          } else if (partType === 'tool') {
+            const tcName = p.name || p.tool || 'unknown';
+            toolCalls.push({
+              name: tcName,
+              input: typeof p.input === 'string' ? p.input : '',
+              status: p.status || 'completed',
+            });
+          } else if (partType === 'tool_result' || partType === 'tool_result') {
+            toolResults.push({
+              name: p.name || p.tool || 'unknown',
+              output: typeof p.output === 'string' ? p.output : '',
+            });
+          } else if (partType === 'file') {
+            const path = p.path || p.file || '';
+            if (path) fileEdits.push(path);
+          } else if (textValue && !partType) {
+            // If no type but has text, treat as text content
+            textContent += textValue;
+          }
+        }
 
-        const reasoningParts = parts
-          .filter((p) => p.type === 'reasoning')
-          .map((p) => p.text || p.content || '')
-          .join('');
-
-        const toolCalls = parts
-          .filter((p) => p.type === 'tool')
-          .map((p) => ({
-            name: p.name || p.tool || 'unknown',
-            input: stringifySafe(p.input ?? p.state?.input),
-            status: p.status || p.state?.status || 'completed',
+        // Debug: log part types for first message
+        if (i === startIdx) {
+          const debug = parts.map((p: any) => ({ 
+            type: p.type || p.part_type, 
+            hasText: !!(p.text || p.content),
+            text: (p.text || p.content || '').substring(0, 100)
           }));
-
-        const toolResults = parts.flatMap((p) => {
-          if (p.type === 'tool_result') {
-            return [
-              {
-                name: p.name || p.tool || 'unknown',
-                output: stringifySafe(p.output ?? p.content),
-              },
-            ];
-          }
-
-          if (p.type === 'tool' && (p.output != null || p.state?.output != null)) {
-            return [
-              {
-                name: p.name || p.tool || 'unknown',
-                output: stringifySafe(p.output ?? p.state?.output),
-              },
-            ];
-          }
-
-          return [];
-        });
-
-        const fileEdits = parts
-          .filter((p) => p.type === 'file')
-          .map((p) => p.path || p.file || '')
-          .filter(Boolean);
+          console.log('Message parts:', debug);
+        }
 
         const tokens = m.info.tokens ? extractTokens(m.info.tokens) : undefined;
         const cost = typeof m.info.cost === 'number' ? m.info.cost : undefined;
 
-        return {
+        mapped.push({
           id: m.info.id,
           role: m.info.role as 'user' | 'assistant',
-          content: textParts,
-          reasoning: reasoningParts || undefined,
+          content: textContent,
+          reasoning: reasoningContent || undefined,
           toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
           toolResults: toolResults.length > 0 ? toolResults : undefined,
           fileEdits: fileEdits.length > 0 ? fileEdits : undefined,
           tokens,
           cost,
-        };
-      });
+        });
+      }
+
       setMessages(mapped);
+      setIsLoading(false);
     } catch (err) {
       console.error('Failed to load messages:', err);
+      setIsLoading(false);
     }
   }, []);
 
@@ -164,6 +170,7 @@ export function useChat() {
         id: crypto.randomUUID(),
         role: 'assistant',
         content: '',
+        reasoning: '',
         streaming: true,
       };
 
@@ -216,16 +223,14 @@ export function useChat() {
           case 'tool_call':
             if (event.data.name) {
               const existingIdx = toolCallsRef.current.findIndex(
-                (t) => t.name === event.data.name && t.status === 'pending'
+                (t) => t.name === event.data.name
               );
 
-              if (existingIdx >= 0 && event.data.status !== 'pending') {
+              if (existingIdx >= 0) {
                 const existing = toolCallsRef.current[existingIdx];
                 if (existing) {
-                  existing.status = event.data.status!;
-                  if (event.data.input) {
-                    existing.input = event.data.input;
-                  }
+                  if (event.data.status) existing.status = event.data.status;
+                  if (event.data.input) existing.input = event.data.input;
                 }
               } else {
                 toolCallsRef.current.push({
@@ -285,7 +290,8 @@ export function useChat() {
               msg.streaming
                 ? {
                     ...msg,
-                    content: event.data.full_text || streamContentRef.current,
+                    // Use accumulated streamContentRef, not event.data.full_text (may have reasoning mixed in)
+                    content: streamContentRef.current || event.data.full_text || '',
                     streaming: false,
                     reasoning: reasoningRef.current || undefined,
                     toolCalls:
@@ -305,6 +311,9 @@ export function useChat() {
                   }
                 : msg
             );
+            
+            // Trigger git refresh after chat completes
+            window.dispatchEvent(new CustomEvent('git-refresh'));
             break;
 
           case 'usage':
@@ -361,6 +370,7 @@ export function useChat() {
     streamingSessionRef.current = null;
     setMessages([]);
     setIsStreaming(false);
+    setIsLoading(false);
     setStatus(null);
   }, []);
 
@@ -387,16 +397,22 @@ export function useChat() {
       }
     }
 
+    // contextTokens = input + cache (what's sent to the model, for % calculation)
+    const contextTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
+    // totalTokens = everything (for display/spent)
+    const totalTokens = inputTokens + outputTokens + reasoningTokens + cacheReadTokens + cacheWriteTokens;
+
     return {
       inputTokens,
       outputTokens,
       reasoningTokens,
       cacheReadTokens,
       cacheWriteTokens,
-      totalTokens: inputTokens + outputTokens + reasoningTokens + cacheReadTokens + cacheWriteTokens,
+      totalTokens,
+      contextTokens,
       cost,
     };
   }, [messages]);
 
-  return { messages, isStreaming, status, send, loadMessages, clearMessages, getSessionUsage };
+  return { messages, isStreaming, isLoading, status, send, loadMessages, clearMessages, getSessionUsage };
 }

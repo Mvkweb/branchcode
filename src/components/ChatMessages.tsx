@@ -1,18 +1,20 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
-  ChevronDown,
-  ChevronRight,
-  Check,
-  Loader2,
-  Pencil,
   Terminal,
+  Pencil,
   Wrench,
   BookOpen,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  FileEdit,
 } from 'lucide-react';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { Message } from '../hooks/useChat';
+import { getGitDiff } from '../lib/tauri';
 
 interface Props {
   message: Message;
@@ -51,17 +53,11 @@ function ThinkingBlock({
   reasoning: string;
   isStreaming: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
-  const startRef = useRef(Date.now());
+  const [expanded, setExpanded] = useState(isStreaming);
+  const hasReasoning = reasoning && reasoning.length > 0;
 
   useEffect(() => {
-    if (!isStreaming) return;
-    startRef.current = Date.now();
-    const id = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
-    }, 1000);
-    return () => clearInterval(id);
+    if (isStreaming) setExpanded(true);
   }, [isStreaming]);
 
   return (
@@ -72,10 +68,12 @@ function ThinkingBlock({
       >
         {isStreaming ? (
           <ShimmerText>Thinking...</ShimmerText>
-        ) : (
+        ) : hasReasoning ? (
           <span className="text-[13px] text-neutral-500 group-hover:text-neutral-300 transition-colors">
-            Thought {elapsed > 0 ? `${elapsed}s` : ''}
+            Thought
           </span>
+        ) : (
+          <span className="text-[13px] text-neutral-500">Thinking...</span>
         )}
         <motion.span
           animate={{ rotate: expanded ? 90 : 0 }}
@@ -87,7 +85,7 @@ function ThinkingBlock({
       </button>
 
       <AnimatePresence>
-        {expanded && (
+        {expanded && hasReasoning && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
@@ -248,6 +246,109 @@ function ToolCallRow({ tc }: { tc: { name: string; input?: string; status?: stri
   );
 }
 
+// ── File Edit with Diff ──
+
+function FileEditItem({ path }: { path: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [diff, setDiff] = useState<string | null>(null);
+
+  const fileName = path.split('/').pop() || path;
+
+  const loadDiff = async () => {
+    if (diff) return;
+    setLoading(true);
+    try {
+      const result = await getGitDiff(path);
+      setDiff(result.diff);
+    } catch (e) {
+      console.error('Failed to load diff:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClick = () => {
+    if (!expanded) {
+      loadDiff();
+    }
+    setExpanded(!expanded);
+  };
+
+  return (
+    <div className="border border-[#1e1e1e] rounded-lg overflow-hidden bg-[#0c0c0c]">
+      <button
+        onClick={handleClick}
+        className="w-full flex items-center justify-between py-[6px] px-3 hover:bg-[#151515] transition-colors"
+      >
+        <div className="flex items-center gap-2.5 text-[13px]">
+          <FileEdit size={13} className="text-yellow-500" />
+          <span className="text-neutral-300 font-mono">{fileName}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {diff && (
+            <span className="text-[10px] text-neutral-600">
+              +{diff.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).length} / 
+              -{diff.split('\n').filter(l => l.startsWith('-') && !l.startsWith('---')).length}
+            </span>
+          )}
+          {expanded ? (
+            <ChevronDown size={14} className="text-neutral-500" />
+          ) : (
+            <ChevronRight size={14} className="text-neutral-500" />
+          )}
+        </div>
+      </button>
+
+      <AnimatePresence>
+        {expanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            {loading ? (
+              <div className="flex items-center gap-2 px-3 py-2 text-neutral-500 text-[12px]">
+                <Loader2 size={12} className="animate-spin" />
+                Loading diff...
+              </div>
+            ) : diff ? (
+              <pre className="text-[11px] font-mono leading-[1.5] p-3 max-h-48 overflow-y-auto custom-scrollbar">
+                {diff.split('\n').slice(0, 50).map((line, i) => {
+                  let className = 'text-neutral-400';
+                  if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) {
+                    className = 'text-neutral-500';
+                  } else if (line.startsWith('+')) {
+                    className = 'text-green-400';
+                  } else if (line.startsWith('-')) {
+                    className = 'text-red-400';
+                  }
+                  return (
+                    <div key={i} className={className}>
+                      {line}
+                    </div>
+                  );
+                })}
+                {diff.split('\n').length > 50 && (
+                  <div className="text-neutral-600 text-[10px] py-1">
+                    ... {diff.split('\n').length - 50} more lines
+                  </div>
+                )}
+              </pre>
+            ) : (
+              <div className="px-3 py-2 text-[12px] text-neutral-500">
+                No diff available
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 // ── Tool Activity Card ──
 
 function ToolActivityCard({
@@ -318,19 +419,7 @@ function ToolActivityCard({
                 </motion.div>
               ))}
               {fileEdits?.map((path, idx) => (
-                <motion.div
-                  key={`fe-${idx}`}
-                  initial={{ opacity: 0, y: 4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.2, delay: idx * 0.03 }}
-                  className="flex items-center justify-between py-[6px] px-3 rounded-lg bg-[#111] border border-[#1a1a1a]"
-                >
-                  <div className="flex items-center gap-2.5 text-[13px]">
-                    <Pencil size={13} className="text-neutral-500" />
-                    <span className="text-neutral-300 font-mono">{path}</span>
-                  </div>
-                  <Check size={14} className="text-emerald-500" />
-                </motion.div>
+                <FileEditItem key={`fe-${idx}`} path={path} />
               ))}
             </div>
           </motion.div>
@@ -584,5 +673,34 @@ export function ChatMessages({ message }: Props) {
         </div>
       )}
     </motion.div>
+  );
+}
+
+// ── Lightweight placeholder for off-screen messages (culling) ──
+
+export function MessagePlaceholder({ message }: Props) {
+  const isUser = message.role === 'user';
+  
+  // Simple character-based height estimation - fast and stable
+  const estimatedHeight = useMemo(() => {
+    const text = message.content || '';
+    if (!text) return isUser ? 52 : 80;
+    
+    // Rough estimate: ~70 chars per line for user, ~60 for assistant (wider markdown)
+    const charsPerLine = isUser ? 70 : 60;
+    const lines = Math.ceil(text.length / charsPerLine);
+    const lineHeight = isUser ? 20 : 22;
+    
+    return isUser 
+      ? Math.max(52, 20 + lines * lineHeight)
+      : Math.max(80, 30 + lines * lineHeight);
+  }, [message.content, isUser]);
+
+  return (
+    <div
+      style={{ height: estimatedHeight, minHeight: 40 }}
+      className="w-full"
+      aria-hidden
+    />
   );
 }
