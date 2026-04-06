@@ -26,7 +26,7 @@ import { useChat } from '../hooks/useChat';
 import { useSessions } from '../hooks/useSessions';
 import { useFileTree } from '../hooks/useFileTree';
 import { ChatMessages } from './ChatMessages';
-import { getConfig, setModel, type ConfigInfo } from '../lib/tauri';
+import { getConfig, setModel, getModelInfo, type ConfigInfo } from '../lib/tauri';
 
 // ── Logo ──
 
@@ -82,6 +82,59 @@ function ContextRing({ percent }: { percent: number }) {
         strokeLinecap="round"
       />
     </svg>
+  );
+}
+
+// ── Context Usage ──
+
+function ContextUsage({
+  percent,
+  tokens,
+  spent,
+}: {
+  percent: number;
+  tokens: string;
+  spent: string;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div
+      className="relative"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        className="flex items-center gap-1.5 text-[11px] text-neutral-500 hover:text-neutral-300 transition-colors"
+      >
+        <ContextRing percent={percent} />
+        <span>{percent}%</span>
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: 6, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 6, scale: 0.98 }}
+            transition={{ duration: 0.14, ease: 'easeOut' }}
+            className="absolute bottom-full right-0 mb-2 w-[170px] rounded-xl border border-[#262626] bg-[#111] shadow-2xl shadow-black/50 px-3 py-2.5 z-50"
+          >
+            <div className="text-[12px] font-semibold text-neutral-100">Context</div>
+            <div className="mt-1.5 space-y-0.5 text-[13px] leading-5">
+              <div className="text-neutral-300 tabular-nums">
+                {tokens} <span className="text-neutral-500">tokens</span>
+              </div>
+              <div className="text-neutral-500 tabular-nums">{percent}% used</div>
+              <div className="text-neutral-500 tabular-nums">{spent} spent</div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }
 
@@ -381,10 +434,11 @@ export default function App() {
   const bottomTextareaRef = useRef<HTMLTextAreaElement>(null);
   const suppressAutoLoadSessionRef = useRef<string | null>(null);
 
-  const { messages, isStreaming, status, send, loadMessages, clearMessages } = useChat();
+  const { messages, isStreaming, status, send, loadMessages, clearMessages, getSessionUsage } = useChat();
   const { sessions, activeSessionId, createSession, deleteSession, selectSession, loadSessions } =
     useSessions();
   const { files, loadDirectory } = useFileTree();
+  const [contextLimit, setContextLimit] = useState(200000);
 
   const loadConfig = useCallback(() => {
     getConfig().then(setConfig).catch(console.error);
@@ -393,6 +447,20 @@ export default function App() {
   useEffect(() => {
     loadConfig();
   }, [loadConfig]);
+
+  useEffect(() => {
+    if (config?.model) {
+      const parts = config.model.split('/');
+      const providerId = parts.length > 1 ? parts[0]! : 'opencode';
+      const modelId = parts.length > 1 ? parts[1]! : parts[0]!;
+      getModelInfo(providerId, modelId)
+        .then((info) => {
+          const limit = info.limit?.context;
+          if (limit && limit > 0) setContextLimit(limit);
+        })
+        .catch(console.error);
+    }
+  }, [config?.model]);
 
   useEffect(() => {
     if (config?.project_dir) loadDirectory(config.project_dir);
@@ -451,7 +519,7 @@ export default function App() {
       suppressAutoLoadSessionRef.current = sessionId;
     }
 
-    await send(sessionId, text);
+    await send(sessionId, text, 'general');
     setInput('');
     await loadSessions();
   }, [input, isStreaming, config?.model, activeSessionId, createSession, send]);
@@ -470,6 +538,10 @@ export default function App() {
 
   const hasMessages = messages.length > 0;
   const canSend = !!input.trim() && !isStreaming && !!config?.model;
+  const usage = getSessionUsage();
+  const usagePercent = contextLimit > 0 ? Math.min(999, Math.round((usage.totalTokens / contextLimit) * 100)) : 0;
+  const costStr = `$${usage.cost.toFixed(4)}`;
+  const tokenStr = usage.totalTokens.toLocaleString();
 
   return (
     <div className="h-screen w-screen flex bg-[#0a0a0a] font-sans text-white overflow-hidden relative">
@@ -849,10 +921,7 @@ export default function App() {
                       <ChevronDown size={10} className="opacity-50" />
                     </button>
                   </div>
-                  <div className="flex items-center gap-1.5 text-[11px] text-neutral-500">
-                    <ContextRing percent={12} />
-                    <span>12%</span>
-                  </div>
+                  <ContextUsage percent={usagePercent} tokens={tokenStr} spent={costStr} />
                 </div>
               </div>
             </div>

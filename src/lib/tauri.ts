@@ -33,6 +33,8 @@ export interface OcMessage {
   id: string;
   role: string;
   session_id: string | null;
+  tokens?: Record<string, unknown>;
+  cost?: number;
 }
 
 export interface OcMessageResponse {
@@ -41,7 +43,7 @@ export interface OcMessageResponse {
 }
 
 export interface StreamEvent {
-  event: 'token' | 'reasoning' | 'tool_call' | 'tool_result' | 'file_edit' | 'step_start' | 'step_finish' | 'done' | 'error' | 'status';
+  event: 'token' | 'reasoning' | 'tool_call' | 'tool_result' | 'file_edit' | 'step_start' | 'step_finish' | 'done' | 'error' | 'status' | 'usage';
   data: {
     token?: string;
     text?: string;
@@ -53,6 +55,8 @@ export interface StreamEvent {
     path?: string;
     status?: string;
     reason?: string;
+    tokens?: Record<string, unknown>;
+    cost?: number;
   };
 }
 
@@ -89,12 +93,14 @@ export async function getMessages(sessionId: string): Promise<OcMessageResponse[
 export async function sendMessage(
   sessionId: string,
   message: string,
-  onEvent: Channel<StreamEvent>
+  onEvent: Channel<StreamEvent>,
+  agent?: string
 ): Promise<void> {
   return invoke('send_message', {
     sessionId,
     message,
     onEvent: onEvent,
+    agent,
   });
 }
 
@@ -110,4 +116,23 @@ export async function listDirectory(path: string): Promise<Record<string, unknow
 
 export async function findFiles(query: string): Promise<string[]> {
   return invoke('find_files', { query });
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  limit?: {
+    context?: number;
+    output?: number;
+  };
+  cost?: {
+    input?: number;
+    output?: number;
+    cache_read?: number;
+    cache_write?: number;
+  };
+}
+
+export async function getModelInfo(providerId: string, modelId: string): Promise<ModelInfo> {
+  return invoke('get_model_info', { providerId, modelId });
 }

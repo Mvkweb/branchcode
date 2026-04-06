@@ -20,6 +20,8 @@ pub struct OcMessage {
     pub id: String,
     pub role: String,
     pub session_id: Option<String>,
+    pub tokens: Option<Value>,
+    pub cost: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -110,13 +112,16 @@ pub enum OcStreamEvent {
     StepFinish { reason: String },
 
     #[serde(rename = "done")]
-    Done { full_text: String },
+    Done { full_text: String, tokens: Option<Value>, cost: Option<f64> },
 
     #[serde(rename = "error")]
     Error { message: String },
 
     #[serde(rename = "status")]
     Status { message: String },
+
+    #[serde(rename = "usage")]
+    Usage { tokens: Value, cost: Option<f64> },
 }
 
 pub struct OpenCodeClient {
@@ -185,10 +190,15 @@ impl OpenCodeClient {
             .await
             .map_err(|e| format!("Failed to get messages: {}", e))?;
 
-        let messages: Vec<OcMessageResponse> = resp
+        let raw: Value = resp
             .json()
             .await
             .map_err(|e| format!("Failed to parse messages: {}", e))?;
+
+        println!("Raw messages response: {}", serde_json::to_string_pretty(&raw).unwrap_or_default());
+
+        let messages: Vec<OcMessageResponse> = serde_json::from_value(raw.clone())
+            .map_err(|e| format!("Failed to deserialize messages: {}\nRaw: {}", e, &raw.to_string().chars().take(500).collect::<String>()))?;
 
         Ok(messages.into_iter().map(OcMessageResponse::normalize).collect())
     }
@@ -198,6 +208,7 @@ impl OpenCodeClient {
         session_id: &str,
         message: &str,
         model: &str,
+        agent: Option<&str>,
         channel: &Channel<OcStreamEvent>,
     ) -> Result<String, String> {
         let (provider, model_id) = if let Some(pos) = model.find('/') {
@@ -206,7 +217,7 @@ impl OpenCodeClient {
             ("opencode".to_string(), model.to_string())
         };
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "parts": [{
                 "type": "text",
                 "text": message
@@ -217,8 +228,15 @@ impl OpenCodeClient {
             }
         });
 
+        if let Some(a) = agent {
+            if !a.is_empty() {
+                body["agent"] = serde_json::json!(a);
+            }
+        }
+
         // Start SSE listener with ready signal
         let (ready_tx, ready_rx) = oneshot::channel();
+        let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<(String, Option<Value>, Option<f64>)>(1);
 
         let client_clone = self.client.clone();
         let base_url_clone = self.base_url.clone();
@@ -228,6 +246,7 @@ impl OpenCodeClient {
             session_id.to_string(),
             channel.clone(),
             Some(ready_tx),
+            Some(done_tx),
         ));
 
         // Wait briefly for SSE connection so early reasoning isn't missed
@@ -237,10 +256,10 @@ impl OpenCodeClient {
             message: format!("{} / {}", provider, model_id),
         });
 
-        // Send the message (blocking, returns when done)
+        // Use prompt_async (non-blocking) to match TUI behavior
         let resp = self
             .client
-            .post(&format!("{}/session/{}/message", self.base_url, session_id))
+            .post(&format!("{}/session/{}/prompt_async", self.base_url, session_id))
             .json(&body)
             .send()
             .await
@@ -252,65 +271,24 @@ impl OpenCodeClient {
             let _ = channel.send(OcStreamEvent::Error {
                 message: format!("OpenCode API error {}: {}", status, body_text),
             });
-            // Abort SSE listener
             sse_handle.abort();
             return Err(format!("OpenCode API error {}: {}", status, body_text));
         }
 
-        let result: OcMessageResponse = resp
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-        let result = result.normalize();
-
-        // Abort SSE listener
-        sse_handle.abort();
-
-        // Build full text from parts
-        let mut full_text = String::new();
-        for part in &result.parts {
-            match part.part_type.as_str() {
-                "text" => {
-                    if let Some(text) = &part.text {
-                        full_text.push_str(text);
-                    }
-                }
-                "tool" => {
-                    if let (Some(name), Some(status)) = (&part.name, &part.status) {
-                        let input_str = part
-                            .input
-                            .as_ref()
-                            .map(|v| serde_json::to_string_pretty(v).unwrap_or_default())
-                            .unwrap_or_default();
-                        let _ = channel.send(OcStreamEvent::ToolCall {
-                            name: name.clone(),
-                            input: input_str,
-                            status: status.clone(),
-                        });
-                    }
-                }
-                "file" => {
-                    if let Some(path) = &part.path {
-                        let _ = channel.send(OcStreamEvent::FileEdit {
-                            path: path.clone(),
-                        });
-                    }
-                }
-                "reasoning" => {
-                    // Already streamed, just collect
-                }
-                _ => {}
+        // Wait for SSE to signal completion
+        let (full_text, _tokens, _cost) = match tokio::time::timeout(Duration::from_secs(300), done_rx.recv()).await {
+            Ok(Some(result)) => result,
+            Ok(None) => {
+                sse_handle.abort();
+                return Err("SSE stream ended without completion".to_string());
             }
-        }
+            Err(_) => {
+                sse_handle.abort();
+                return Err("Timed out waiting for response".to_string());
+            }
+        };
 
-        if full_text.is_empty() {
-            full_text = "[Agent completed — check the file tree for changes]".to_string();
-        }
-
-        let _ = channel.send(OcStreamEvent::Done {
-            full_text: full_text.clone(),
-        });
+        sse_handle.abort();
 
         Ok(full_text)
     }
@@ -342,6 +320,7 @@ impl OpenCodeClient {
         session_id: String,
         channel: Channel<OcStreamEvent>,
         ready_tx: Option<oneshot::Sender<()>>,
+        done_tx: Option<tokio::sync::mpsc::Sender<(String, Option<Value>, Option<f64>)>>,
     ) {
         let resp = match client
             .get(&format!("{}/event", base_url))
@@ -358,6 +337,10 @@ impl OpenCodeClient {
 
         let mut stream = resp.bytes_stream();
         let mut buffer = String::new();
+        let mut accumulated_text = String::new();
+        let mut accumulated_reasoning = String::new();
+        let mut last_tokens: Option<Value> = None;
+        let mut last_cost: Option<f64> = None;
 
         while let Some(chunk_result) = stream.next().await {
             let chunk = match chunk_result {
@@ -400,6 +383,38 @@ impl OpenCodeClient {
                 }
 
                 match event_type {
+                    "message.updated" => {
+                        let info = props.get("info").cloned().unwrap_or(Value::Null);
+                        let tokens = info.get("tokens").cloned();
+                        let cost = info.get("cost").and_then(|v| v.as_f64());
+
+                        if let Some(t) = tokens.clone() {
+                            last_tokens = Some(t);
+                            last_cost = cost;
+                            let _ = channel.send(OcStreamEvent::Usage {
+                                tokens: tokens.unwrap(),
+                                cost,
+                            });
+                        }
+                    }
+                    "message.part.delta" => {
+                        let field = props.get("field").and_then(|v| v.as_str()).unwrap_or("");
+                        let delta = props.get("delta").and_then(Self::value_to_string);
+
+                        if let Some(d) = delta {
+                            match field {
+                                "text" => {
+                                    accumulated_text.push_str(&d);
+                                    let _ = channel.send(OcStreamEvent::Token { token: d });
+                                }
+                                "reasoning" => {
+                                    accumulated_reasoning.push_str(&d);
+                                    let _ = channel.send(OcStreamEvent::Reasoning { text: d });
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     "message.part.updated" | "message.part.added" => {
                         let part = props.get("part").cloned().unwrap_or(Value::Null);
                         let delta = Self::extract_delta(&props, &part);
@@ -469,7 +484,23 @@ impl OpenCodeClient {
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("")
                                     .to_string();
-                                let _ = channel.send(OcStreamEvent::StepFinish { reason });
+                                let _ = channel.send(OcStreamEvent::StepFinish { reason: reason.clone() });
+
+                                if reason == "stop" {
+                                    let full_text = if accumulated_text.is_empty() {
+                                        "[Agent completed — check the file tree for changes]".to_string()
+                                    } else {
+                                        accumulated_text.clone()
+                                    };
+                                    let _ = channel.send(OcStreamEvent::Done {
+                                        full_text: full_text.clone(),
+                                        tokens: last_tokens.clone(),
+                                        cost: last_cost,
+                                    });
+                                    if let Some(ref tx) = done_tx {
+                                        let _ = tx.send((full_text, last_tokens.clone(), last_cost)).await;
+                                    }
+                                }
                             }
                             _ => {}
                         }
@@ -569,5 +600,23 @@ impl OpenCodeClient {
         resp.json()
             .await
             .map_err(|e| format!("Failed to parse file search: {}", e))
+    }
+
+    pub async fn get_model_info(&self, provider_id: &str, model_id: &str) -> Result<Value, String> {
+        let resp = self
+            .client
+            .get(&format!(
+                "{}/provider/{}/model/{}",
+                self.base_url,
+                urlencoding::encode(provider_id),
+                urlencoding::encode(model_id)
+            ))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to get model info: {}", e))?;
+
+        resp.json()
+            .await
+            .map_err(|e| format!("Failed to parse model info: {}", e))
     }
 }

@@ -91,6 +91,7 @@ async fn send_message(
     session_id: String,
     message: String,
     on_event: Channel<OcStreamEvent>,
+    agent: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let model = state.model.lock().unwrap().clone();
@@ -99,9 +100,11 @@ async fn send_message(
         return Err("No model selected. Pick a model first.".to_string());
     }
 
+    let agent_str = agent.as_deref();
+
     state
         .client
-        .send_message(&session_id, &message, &model, &on_event)
+        .send_message(&session_id, &message, &model, agent_str, &on_event)
         .await?;
 
     Ok(())
@@ -128,6 +131,15 @@ async fn find_files(
     state: State<'_, AppState>,
 ) -> Result<Vec<String>, String> {
     state.client.find_files(&query).await
+}
+
+#[tauri::command]
+async fn get_model_info(
+    provider_id: String,
+    model_id: String,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    state.client.get_model_info(&provider_id, &model_id).await
 }
 
 // ── App setup ──
@@ -174,6 +186,7 @@ pub fn run() {
             read_file,
             list_directory,
             find_files,
+            get_model_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

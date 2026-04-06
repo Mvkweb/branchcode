@@ -16,6 +16,18 @@ export interface Message {
   toolResults?: { name: string; output: string }[];
   fileEdits?: string[];
   streaming?: boolean;
+  tokens?: { input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number };
+  cost?: number;
+}
+
+export interface SessionUsage {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  cost: number;
 }
 
 const stringifySafe = (value: unknown) => {
@@ -26,6 +38,22 @@ const stringifySafe = (value: unknown) => {
   } catch {
     return String(value);
   }
+};
+
+const extractTokens = (tokens: unknown) => {
+  if (!tokens) return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
+  if (typeof tokens === 'number') return { input: 0, output: tokens, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
+  if (typeof tokens === 'object') {
+    const t = tokens as Record<string, unknown>;
+    return {
+      input: (t.input as number) || 0,
+      output: (t.output as number) || 0,
+      reasoning: (t.reasoning as number) || 0,
+      cacheRead: ((t.cache as Record<string, unknown>)?.read as number) || 0,
+      cacheWrite: ((t.cache as Record<string, unknown>)?.write as number) || 0,
+    };
+  }
+  return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
 };
 
 export function useChat() {
@@ -98,6 +126,9 @@ export function useChat() {
           .map((p) => p.path || p.file || '')
           .filter(Boolean);
 
+        const tokens = m.info.tokens ? extractTokens(m.info.tokens) : undefined;
+        const cost = typeof m.info.cost === 'number' ? m.info.cost : undefined;
+
         return {
           id: m.info.id,
           role: m.info.role as 'user' | 'assistant',
@@ -106,6 +137,8 @@ export function useChat() {
           toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
           toolResults: toolResults.length > 0 ? toolResults : undefined,
           fileEdits: fileEdits.length > 0 ? fileEdits : undefined,
+          tokens,
+          cost,
         };
       });
       setMessages(mapped);
@@ -115,7 +148,7 @@ export function useChat() {
   }, []);
 
   const send = useCallback(
-    async (sessionId: string, content: string) => {
+    async (sessionId: string, content: string, agent?: string) => {
       if (!content.trim() || isStreaming || loadingRef.current) return;
       loadingRef.current = true;
       streamingSessionRef.current = sessionId;
@@ -245,6 +278,9 @@ export function useChat() {
             loadingRef.current = false;
             streamingSessionRef.current = null;
 
+            const doneTokens = event.data.tokens ? extractTokens(event.data.tokens) : undefined;
+            const doneCost = event.data.cost;
+
             updateAssistant((msg) =>
               msg.streaming
                 ? {
@@ -264,9 +300,24 @@ export function useChat() {
                       fileEditsRef.current.length > 0
                         ? [...fileEditsRef.current]
                         : undefined,
+                    tokens: doneTokens,
+                    cost: doneCost,
                   }
                 : msg
             );
+            break;
+
+          case 'usage':
+            if (event.data.tokens) {
+              const usageTokens = extractTokens(event.data.tokens);
+              const usageCost = event.data.cost;
+
+              updateAssistant((msg) =>
+                msg.streaming
+                  ? { ...msg, tokens: usageTokens, cost: usageCost }
+                  : msg
+              );
+            }
             break;
 
           case 'error':
@@ -289,7 +340,7 @@ export function useChat() {
       };
 
       try {
-        await tauriSendMessage(sessionId, content.trim(), channel);
+        await tauriSendMessage(sessionId, content.trim(), channel, agent);
       } catch (err: any) {
         setIsStreaming(false);
         loadingRef.current = false;
@@ -313,5 +364,39 @@ export function useChat() {
     setStatus(null);
   }, []);
 
-  return { messages, isStreaming, status, send, loadMessages, clearMessages };
+  const getSessionUsage = useCallback((): SessionUsage => {
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let reasoningTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheWriteTokens = 0;
+    let cost = 0;
+
+    // Only count the LAST assistant message's tokens (current turn)
+    // Previous turns are already spent - we don't want to double-count
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg && msg.role === 'assistant' && msg.tokens) {
+        inputTokens += msg.tokens.input;
+        outputTokens += msg.tokens.output;
+        reasoningTokens += msg.tokens.reasoning;
+        cacheReadTokens += msg.tokens.cacheRead;
+        cacheWriteTokens += msg.tokens.cacheWrite;
+        cost += msg.cost || 0;
+        break; // Only count the most recent assistant message
+      }
+    }
+
+    return {
+      inputTokens,
+      outputTokens,
+      reasoningTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      totalTokens: inputTokens + outputTokens + reasoningTokens + cacheReadTokens + cacheWriteTokens,
+      cost,
+    };
+  }, [messages]);
+
+  return { messages, isStreaming, status, send, loadMessages, clearMessages, getSessionUsage };
 }
