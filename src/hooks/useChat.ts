@@ -49,6 +49,195 @@ const extractTokens = (tokens: unknown) => {
 // Pagination: load last N messages first for fast initial render
 const PAGE_SIZE = 30;
 
+type ToolCall = NonNullable<Message['toolCalls']>[number];
+type ToolResult = NonNullable<Message['toolResults']>[number];
+
+const stringifyValue = (value: unknown): string => {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+};
+
+const getPartType = (part: any): string =>
+  String(part?.type ?? part?.part_type ?? part?.partType ?? '').toLowerCase();
+
+const getPartText = (part: any): string =>
+  typeof part?.text === 'string'
+    ? part.text
+    : typeof part?.content === 'string'
+      ? part.content
+      : typeof part?.text_content === 'string'
+        ? part.text_content
+        : '';
+
+const getPartPath = (part: any): string | undefined => {
+  const direct = part?.path ?? part?.file ?? part?.file_path ?? part?.filePath;
+  if (typeof direct === 'string' && direct) return direct;
+
+  const input = part?.input ?? part?.state?.input;
+  if (input && typeof input === 'object') {
+    const obj = input as Record<string, unknown>;
+    const maybePath = obj.path ?? obj.file_path ?? obj.filePath;
+    if (typeof maybePath === 'string' && maybePath) return maybePath;
+  }
+
+  return undefined;
+};
+
+const isEditTool = (name: string) => /edit|write|create|update|patch/i.test(name);
+
+const dedupeBy = <T,>(items: T[], keyFn: (item: T) => string): T[] => {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = keyFn(item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+const joinBlocks = (a?: string, b?: string) => {
+  if (!a) return b ?? '';
+  if (!b) return a;
+  return `${a}\n\n${b}`;
+};
+
+const mapOcMessageToUi = (m: any): Message => {
+  const parts = Array.isArray(m.parts) ? m.parts : [];
+
+  let textContent = '';
+  let reasoningContent = '';
+  const toolCalls: ToolCall[] = [];
+  const toolResults: ToolResult[] = [];
+  const fileEdits: string[] = [];
+
+  for (const p of parts) {
+    const partType = getPartType(p);
+    const textValue = getPartText(p);
+
+    if (partType === 'text' || (!partType && textValue)) {
+      textContent += textValue;
+      continue;
+    }
+
+    if (partType === 'reasoning' || partType === 'thinking' || partType === 'thought') {
+      reasoningContent += textValue;
+      continue;
+    }
+
+    if (partType === 'file' || partType === 'file_edit' || partType === 'file-edit') {
+      const path = getPartPath(p);
+      if (path) fileEdits.push(path);
+      continue;
+    }
+
+    const name =
+      typeof (p?.name ?? p?.tool) === 'string'
+        ? String(p.name ?? p.tool)
+        : 'unknown';
+
+    const input = p?.input ?? p?.state?.input;
+    const output = p?.output ?? p?.state?.output;
+    const status =
+      typeof (p?.status ?? p?.state?.status) === 'string'
+        ? String(p.status ?? p.state?.status)
+        : 'completed';
+
+    if (partType === 'tool_result' || partType === 'tool-call-result') {
+      toolResults.push({
+        name,
+        output: stringifyValue(output),
+      });
+      continue;
+    }
+
+    const looksLikeTool =
+      partType === 'tool' ||
+      partType === 'tool_call' ||
+      p?.name != null ||
+      p?.tool != null ||
+      p?.state != null;
+
+    if (looksLikeTool) {
+      toolCalls.push({
+        name,
+        input: stringifyValue(input),
+        status,
+      });
+
+      if (output != null && stringifyValue(output)) {
+        toolResults.push({
+          name,
+          output: stringifyValue(output),
+        });
+      }
+
+      const path = getPartPath(p);
+      if (path && isEditTool(name)) {
+        fileEdits.push(path);
+      }
+    }
+  }
+
+  const tokens = m.info?.tokens ? extractTokens(m.info.tokens) : undefined;
+  const cost = typeof m.info?.cost === 'number' ? m.info.cost : undefined;
+
+  return {
+    id: m.info?.id ?? crypto.randomUUID(),
+    role: (m.info?.role ?? 'assistant') as 'user' | 'assistant',
+    content: textContent,
+    reasoning: reasoningContent || undefined,
+    toolCalls: toolCalls.length ? toolCalls : undefined,
+    toolResults: toolResults.length ? toolResults : undefined,
+    fileEdits: fileEdits.length ? dedupeBy(fileEdits, (x) => x) : undefined,
+    tokens,
+    cost,
+  };
+};
+
+const mergeAssistantTurns = (items: Message[]): Message[] => {
+  const merged: Message[] = [];
+
+  for (const msg of items) {
+    const last = merged[merged.length - 1];
+
+    if (msg.role === 'assistant' && last?.role === 'assistant') {
+      last.content = joinBlocks(last.content, msg.content);
+      last.reasoning = joinBlocks(last.reasoning, msg.reasoning) || undefined;
+
+      const mergedToolCalls = dedupeBy(
+        [...(last.toolCalls ?? []), ...(msg.toolCalls ?? [])],
+        (t) => `${t.name}|${t.input}|${t.status}`
+      );
+      last.toolCalls = mergedToolCalls.length ? mergedToolCalls : undefined;
+
+      const mergedToolResults = dedupeBy(
+        [...(last.toolResults ?? []), ...(msg.toolResults ?? [])],
+        (t) => `${t.name}|${t.output}`
+      );
+      last.toolResults = mergedToolResults.length ? mergedToolResults : undefined;
+
+      const mergedFileEdits = dedupeBy(
+        [...(last.fileEdits ?? []), ...(msg.fileEdits ?? [])],
+        (p) => p
+      );
+      last.fileEdits = mergedFileEdits.length ? mergedFileEdits : undefined;
+
+      last.tokens = msg.tokens ?? last.tokens;
+      last.cost = msg.cost ?? last.cost;
+      continue;
+    }
+
+    merged.push({ ...msg });
+  }
+
+  return merged;
+};
+
 export function useChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -94,74 +283,11 @@ export function useChat() {
       const totalLen = ocMessages.length;
       const startIdx = Math.max(0, totalLen - PAGE_SIZE);
       
-      const mapped: Message[] = [];
-      
-      for (let i = startIdx; i < totalLen; i++) {
-        const m = ocMessages[i]!;
-        const parts = (m.parts ?? []) as any[];
-        
-        let textContent = '';
-        let reasoningContent = '';
-        const toolCalls: { name: string; input: string; status: string }[] = [];
-        const toolResults: { name: string; output: string }[] = [];
-        const fileEdits: string[] = [];
+      const rawMapped = ocMessages
+        .slice(startIdx)
+        .map(mapOcMessageToUi);
 
-        for (const p of parts) {
-          // Handle various type field names and formats
-          const partType = (p.type || p.part_type || p.partType || '').toString().toLowerCase();
-          const textValue = p.text || p.content || p.text_content || '';
-          
-          if (partType === 'text') {
-            textContent += textValue;
-          } else if (partType === 'reasoning' || partType === 'thinking' || partType === 'thought') {
-            reasoningContent += textValue;
-          } else if (partType === 'tool' || partType === 'tool_call') {
-            const tcName = p.name || p.tool || 'unknown';
-            toolCalls.push({
-              name: tcName,
-              input: typeof p.input === 'string' ? p.input : '',
-              status: p.status || 'completed',
-            });
-          } else if (partType === 'tool_result' || partType === 'tool-call-result') {
-            toolResults.push({
-              name: p.name || p.tool || 'unknown',
-              output: typeof p.output === 'string' ? p.output : '',
-            });
-          } else if (partType === 'file' || partType === 'file_edit') {
-            const path = p.path || p.file || '';
-            if (path) fileEdits.push(path);
-          } else if (textValue && !partType) {
-            // If no type but has text, treat as text content
-            textContent += textValue;
-          }
-        }
-
-        // Debug: log all part types for first message
-        if (i === startIdx) {
-          const debug = parts.map((p: any) => ({ 
-            type: p.type || p.part_type || p.partType,
-            name: p.name || p.tool,
-            hasText: !!(p.text || p.content),
-            text: (p.text || p.content || '').substring(0, 100)
-          }));
-          console.log('Message parts:', debug);
-        }
-
-        const tokens = m.info.tokens ? extractTokens(m.info.tokens) : undefined;
-        const cost = typeof m.info.cost === 'number' ? m.info.cost : undefined;
-
-        mapped.push({
-          id: m.info.id,
-          role: m.info.role as 'user' | 'assistant',
-          content: textContent,
-          reasoning: reasoningContent || undefined,
-          toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-          toolResults: toolResults.length > 0 ? toolResults : undefined,
-          fileEdits: fileEdits.length > 0 ? fileEdits : undefined,
-          tokens,
-          cost,
-        });
-      }
+      const mapped = mergeAssistantTurns(rawMapped);
 
       setMessages(mapped);
       setIsLoading(false);

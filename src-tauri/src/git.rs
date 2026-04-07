@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,17 +139,114 @@ impl GitService {
         })
     }
 
+    fn to_repo_relative_path(&self, file_path: &str) -> Result<String, String> {
+        let repo_root = Path::new(&self.project_path);
+        let raw_path = Path::new(file_path);
+
+        let relative: PathBuf = if raw_path.is_absolute() {
+            if let Ok(stripped) = raw_path.strip_prefix(repo_root) {
+                stripped.to_path_buf()
+            } else {
+                let repo_canon = repo_root
+                    .canonicalize()
+                    .unwrap_or_else(|_| repo_root.to_path_buf());
+
+                let raw_canon = raw_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| raw_path.to_path_buf());
+
+                raw_canon
+                    .strip_prefix(&repo_canon)
+                    .map(|p| p.to_path_buf())
+                    .map_err(|_| {
+                        format!(
+                            "Path '{}' is outside repository '{}'",
+                            file_path, self.project_path
+                        )
+                    })?
+            }
+        } else {
+            raw_path.to_path_buf()
+        };
+
+        Ok(relative.to_string_lossy().replace('\\', "/"))
+    }
+
+    fn build_new_file_diff(path: &str, content: &str) -> String {
+        let lines: Vec<&str> = content.lines().collect();
+        let mut diff = format!(
+            "diff --git a/{0} b/{0}\nnew file mode 100644\n--- /dev/null\n+++ b/{0}\n@@ -0,0 +1,{1} @@\n",
+            path,
+            lines.len()
+        );
+
+        for line in lines {
+            diff.push('+');
+            diff.push_str(line);
+            diff.push('\n');
+        }
+
+        diff
+    }
+
+    fn build_deleted_file_diff(path: &str, content: &str) -> String {
+        let lines: Vec<&str> = content.lines().collect();
+        let mut diff = format!(
+            "diff --git a/{0} b/{0}\ndeleted file mode 100644\n--- a/{0}\n+++ /dev/null\n@@ -1,{1} +0,0 @@\n",
+            path,
+            lines.len()
+        );
+
+        for line in lines {
+            diff.push('-');
+            diff.push_str(line);
+            diff.push('\n');
+        }
+
+        diff
+    }
+
     pub fn get_diff(&self, file_path: &str) -> Result<GitDiff, String> {
-        let output = self.run_git(&["diff", "HEAD", "--no-color", "--", file_path])?;
+        let relative_path = self.to_repo_relative_path(file_path)?;
+
+        let old_content = self
+            .run_git(&["show", &format!("HEAD:{}", relative_path)])
+            .ok();
+
+        let new_content = self.get_file_content(&relative_path);
+
+        let mut output = self
+            .run_git(&["diff", "HEAD", "--no-color", "--", &relative_path])
+            .unwrap_or_default();
+
+        if output.trim().is_empty() {
+            let cached = self
+                .run_git(&["diff", "--cached", "--no-color", "--", &relative_path])
+                .unwrap_or_default();
+
+            let working = self
+                .run_git(&["diff", "--no-color", "--", &relative_path])
+                .unwrap_or_default();
+
+            output = [cached, working]
+                .into_iter()
+                .filter(|s| !s.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+
+        if output.trim().is_empty() {
+            output = match (&old_content, &new_content) {
+                (None, Some(content)) => Self::build_new_file_diff(&relative_path, content),
+                (Some(content), None) => Self::build_deleted_file_diff(&relative_path, content),
+                _ => String::new(),
+            };
+        }
 
         let (additions, deletions) = Self::parse_diff_stats(&output);
 
-        let new_content = self.get_file_content(file_path);
-        let old_content = self.run_git(&["show", &format!("HEAD:{}", file_path)])
-            .ok();
-
         Ok(GitDiff {
-            path: file_path.to_string(),
+            path: relative_path,
             old_content,
             new_content,
             diff: output,
@@ -251,15 +348,8 @@ impl GitService {
                     let path = parts[0].trim().to_string();
                     let stats = parts[1].trim();
 
-                    let mut additions = 0;
-                    let mut deletions = 0;
-
-                    if let Some(plus_count) = stats.matches('+').count().checked_sub(1) {
-                        additions = plus_count as i32;
-                    }
-                    if let Some(minus_count) = stats.matches('-').count().checked_sub(1) {
-                        deletions = minus_count as i32;
-                    }
+                    let additions = stats.matches('+').count() as i32;
+                    let deletions = stats.matches('-').count() as i32;
 
                     files.push(GitFile {
                         path,

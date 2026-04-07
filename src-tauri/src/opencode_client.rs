@@ -33,19 +33,22 @@ pub struct OcToolState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OcPart {
-    #[serde(rename = "type")]
+    #[serde(rename = "type", alias = "partType", alias = "part_type")]
     pub part_type: Option<String>,
+
     pub text: Option<String>,
+
+    #[serde(alias = "textContent", alias = "text_content")]
     pub content: Option<String>,
 
-    #[serde(alias = "tool")]
+    #[serde(alias = "tool", alias = "toolName", alias = "tool_name")]
     pub name: Option<String>,
 
     pub input: Option<Value>,
     pub output: Option<Value>,
     pub status: Option<String>,
 
-    #[serde(alias = "file")]
+    #[serde(alias = "file", alias = "filePath", alias = "file_path")]
     pub path: Option<String>,
 
     #[serde(default)]
@@ -56,11 +59,6 @@ impl OcPart {
     fn normalize(mut self) -> Self {
         if self.text.is_none() {
             self.text = self.content.clone();
-        }
-        
-        // Handle case where type might be under a different field or missing
-        if self.part_type.is_none() {
-            // Try to infer from other fields
         }
 
         if let Some(state) = &self.state {
@@ -73,6 +71,18 @@ impl OcPart {
             if self.status.is_none() {
                 self.status = state.status.clone();
             }
+        }
+
+        if self.part_type.is_none() {
+            self.part_type = if self.name.is_some() || self.input.is_some() || self.output.is_some() {
+                Some("tool".to_string())
+            } else if self.path.is_some() {
+                Some("file_edit".to_string())
+            } else if self.text.as_ref().map(|s| !s.is_empty()).unwrap_or(false) {
+                Some("text".to_string())
+            } else {
+                None
+            };
         }
 
         self
@@ -89,6 +99,7 @@ impl OcMessageResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OcMessageResponse {
     pub info: OcMessage,
+    #[serde(default)]
     pub parts: Vec<OcPart>,
 }
 

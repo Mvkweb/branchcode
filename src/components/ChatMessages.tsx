@@ -1,4 +1,4 @@
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   Terminal,
@@ -15,10 +15,124 @@ import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { Message } from '../hooks/useChat';
 import { getGitDiff } from '../lib/tauri';
+import { DiffViewer } from './DiffViewer';
+import { CodeBlock } from './CodeBlock';
 
 interface Props {
   message: Message;
 }
+
+const markdownComponents: Components = {
+  p({ children }) {
+    return <p className="mb-4 last:mb-0">{children}</p>;
+  },
+  code({ className, children, ...props }) {
+    const match = /language-(\w+)/.exec(className || '');
+    const content = String(children).replace(/\n$/, '');
+    const isBlock = match || content.includes('\n');
+
+    if (isBlock) {
+      return <CodeBlock code={content} language={match ? (match[1] || '') : ''} />;
+    }
+
+    return (
+      <code
+        className="bg-[#1e1e1e] border border-[#2a2a2a] px-[6px] py-[2px] rounded-[5px] text-[13px] font-mono text-neutral-200"
+        {...props}
+      >
+        {children}
+      </code>
+    );
+  },
+  ul({ children }) {
+    return (
+      <ul className="pl-5 mb-4 space-y-1.5 list-disc marker:text-neutral-600">
+        {children}
+      </ul>
+    );
+  },
+  ol({ children }) {
+    return (
+      <ol className="pl-5 mb-4 space-y-1.5 list-decimal marker:text-neutral-600">
+        {children}
+      </ol>
+    );
+  },
+  li({ children }) {
+    return <li className="text-neutral-300 leading-[1.7]">{children}</li>;
+  },
+  a({ children, href }) {
+    return (
+      <a
+        href={href}
+        className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2 decoration-indigo-400/30 hover:decoration-indigo-300/50 transition-colors"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        {children}
+      </a>
+    );
+  },
+  strong({ children }) {
+    return <strong className="font-semibold text-neutral-100">{children}</strong>;
+  },
+  em({ children }) {
+    return <em className="text-neutral-400">{children}</em>;
+  },
+  blockquote({ children }) {
+    return (
+      <blockquote className="border-l-2 border-[#2a2a2a] pl-4 my-4 text-neutral-400">
+        {children}
+      </blockquote>
+    );
+  },
+  h1({ children }) {
+    return (
+      <h1 className="text-xl font-semibold text-neutral-100 mt-6 mb-3">{children}</h1>
+    );
+  },
+  h2({ children }) {
+    return (
+      <h2 className="text-lg font-semibold text-neutral-100 mt-5 mb-2.5">
+        {children}
+      </h2>
+    );
+  },
+  h3({ children }) {
+    return (
+      <h3 className="text-[15px] font-semibold text-neutral-100 mt-4 mb-2">
+        {children}
+      </h3>
+    );
+  },
+  hr() {
+    return <hr className="border-[#1e1e1e] my-6" />;
+  },
+  table({ children }) {
+    return (
+      <div className="my-4 overflow-x-auto rounded-lg border border-[#1e1e1e]">
+        <table className="w-full text-[13px]">{children}</table>
+      </div>
+    );
+  },
+  thead({ children }) {
+    return <thead className="bg-[#0e0e0e]">{children}</thead>;
+  },
+  th({ children }) {
+    return (
+      <th className="text-left px-3 py-2 text-neutral-300 font-medium border-b border-[#1e1e1e]">
+        {children}
+      </th>
+    );
+  },
+  td({ children }) {
+    return (
+      <td className="px-3 py-2 text-neutral-400 border-b border-[#141414]">
+        {children}
+      </td>
+    );
+  },
+};
 
 // ── Shimmer text for thinking state ──
 
@@ -315,28 +429,7 @@ function FileEditItem({ path }: { path: string }) {
                 Loading diff...
               </div>
             ) : diff ? (
-              <pre className="text-[11px] font-mono leading-[1.5] p-3 max-h-48 overflow-y-auto custom-scrollbar">
-                {diff.split('\n').slice(0, 50).map((line, i) => {
-                  let className = 'text-neutral-400';
-                  if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) {
-                    className = 'text-neutral-500';
-                  } else if (line.startsWith('+')) {
-                    className = 'text-green-400';
-                  } else if (line.startsWith('-')) {
-                    className = 'text-red-400';
-                  }
-                  return (
-                    <div key={i} className={className}>
-                      {line}
-                    </div>
-                  );
-                })}
-                {diff.split('\n').length > 50 && (
-                  <div className="text-neutral-600 text-[10px] py-1">
-                    ... {diff.split('\n').length - 50} more lines
-                  </div>
-                )}
-              </pre>
+              <DiffViewer diff={diff} maxLines={50} />
             ) : (
               <div className="px-3 py-2 text-[12px] text-neutral-500">
                 No diff available
@@ -497,17 +590,7 @@ export function ChatMessages({ message }: Props) {
       {/* Explored files count (subtle, like reference) */}
       {readCount > 0 && !hasToolActivity && <ExploredFiles count={readCount} />}
 
-      {/* Inline tool calls (outside tool card — for simple edit/read flows) */}
-      {message.toolCalls &&
-        message.toolCalls.length > 0 &&
-        message.toolCalls.length <= 3 &&
-        !message.toolResults?.length && (
-          <div className="space-y-1">
-            {message.toolCalls.map((tc, idx) => (
-              <ToolCallRow key={`inline-tc-${idx}`} tc={tc} />
-            ))}
-          </div>
-        )}
+
 
       {/* Tool Activity Card */}
       {hasToolActivity &&
@@ -524,130 +607,7 @@ export function ChatMessages({ message }: Props) {
         <div className="text-[15px] leading-[1.75] text-neutral-300">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
-            components={{
-              p({ children }) {
-                return <p className="mb-4 last:mb-0">{children}</p>;
-              },
-              code({ className, children, ...props }) {
-                const match = /language-(\w+)/.exec(className || '');
-                const content = String(children).replace(/\n$/, '');
-                const isBlock = match || content.includes('\n');
-
-                if (isBlock) {
-                  return (
-                    <div className="my-5 relative group">
-                      {match && (
-                        <div className="absolute top-3 right-3 text-[11px] text-neutral-600 font-mono select-none opacity-60">
-                          {match[1]}
-                        </div>
-                      )}
-                      <pre className="bg-[#0c0c0c] border border-[#1a1a1a] rounded-lg p-4 overflow-x-auto">
-                        <code className="text-[13px] leading-[1.65] font-mono text-neutral-300">
-                          {children}
-                        </code>
-                      </pre>
-                    </div>
-                  );
-                }
-
-                return (
-                  <code
-                    className="bg-[#1e1e1e] border border-[#2a2a2a] px-[6px] py-[2px] rounded-[5px] text-[13px] font-mono text-neutral-200"
-                    {...props}
-                  >
-                    {children}
-                  </code>
-                );
-              },
-              ul({ children }) {
-                return (
-                  <ul className="pl-5 mb-4 space-y-1.5 list-disc marker:text-neutral-600">
-                    {children}
-                  </ul>
-                );
-              },
-              ol({ children }) {
-                return (
-                  <ol className="pl-5 mb-4 space-y-1.5 list-decimal marker:text-neutral-600">
-                    {children}
-                  </ol>
-                );
-              },
-              li({ children }) {
-                return <li className="text-neutral-300 leading-[1.7]">{children}</li>;
-              },
-              a({ children, href }) {
-                return (
-                  <a
-                    href={href}
-                    className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2 decoration-indigo-400/30 hover:decoration-indigo-300/50 transition-colors"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    {children}
-                  </a>
-                );
-              },
-              strong({ children }) {
-                return <strong className="font-semibold text-neutral-100">{children}</strong>;
-              },
-              em({ children }) {
-                return <em className="text-neutral-400">{children}</em>;
-              },
-              blockquote({ children }) {
-                return (
-                  <blockquote className="border-l-2 border-[#2a2a2a] pl-4 my-4 text-neutral-400">
-                    {children}
-                  </blockquote>
-                );
-              },
-              h1({ children }) {
-                return (
-                  <h1 className="text-xl font-semibold text-neutral-100 mt-6 mb-3">{children}</h1>
-                );
-              },
-              h2({ children }) {
-                return (
-                  <h2 className="text-lg font-semibold text-neutral-100 mt-5 mb-2.5">
-                    {children}
-                  </h2>
-                );
-              },
-              h3({ children }) {
-                return (
-                  <h3 className="text-[15px] font-semibold text-neutral-100 mt-4 mb-2">
-                    {children}
-                  </h3>
-                );
-              },
-              hr() {
-                return <hr className="border-[#1e1e1e] my-6" />;
-              },
-              table({ children }) {
-                return (
-                  <div className="my-4 overflow-x-auto rounded-lg border border-[#1e1e1e]">
-                    <table className="w-full text-[13px]">{children}</table>
-                  </div>
-                );
-              },
-              thead({ children }) {
-                return <thead className="bg-[#0e0e0e]">{children}</thead>;
-              },
-              th({ children }) {
-                return (
-                  <th className="text-left px-3 py-2 text-neutral-300 font-medium border-b border-[#1e1e1e]">
-                    {children}
-                  </th>
-                );
-              },
-              td({ children }) {
-                return (
-                  <td className="px-3 py-2 text-neutral-400 border-b border-[#141414]">
-                    {children}
-                  </td>
-                );
-              },
-            }}
+            components={markdownComponents}
           >
             {message.content}
           </ReactMarkdown>

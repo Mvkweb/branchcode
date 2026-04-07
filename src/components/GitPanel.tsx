@@ -16,6 +16,7 @@ import {
   LoaderCircle,
 } from 'lucide-react';
 import type { GitStatus, GitFile, GitBranch as GitBranchType } from '../lib/tauri';
+import { DiffViewer } from './DiffViewer';
 
 interface GitPanelProps {
   status: GitStatus | null;
@@ -135,9 +136,9 @@ function FileRow({
                     Fetching diff...
                   </div>
                 ) : diff ? (
-                  <pre className="text-[11px] leading-relaxed font-mono text-neutral-400 whitespace-pre-wrap break-all max-h-[300px] overflow-y-auto custom-scrollbar">
-                    {diff}
-                  </pre>
+                  <div className="-mx-2 -mb-2 mt-2 border-t border-white/5">
+                    <DiffViewer diff={diff} maxLines={0} maxHeightClass="max-h-[300px]" />
+                  </div>
                 ) : (
                   <div className="text-[11px] text-neutral-600 py-1">
                     No displayable changes
