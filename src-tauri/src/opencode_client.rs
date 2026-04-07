@@ -331,8 +331,6 @@ impl OpenCodeClient {
             }
         };
 
-        // Give SSE stream time to send trailing events
-        tokio::time::sleep(Duration::from_millis(200)).await;
         sse_handle.abort();
 
         Ok(full_text)
@@ -428,6 +426,7 @@ impl OpenCodeClient {
         let mut message_roles: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         let part_message_ids: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         let mut assistant_message_id: Option<String> = None;
+        let mut step_stopped = false;
 
         while let Some(chunk_result) = stream.next().await {
             let chunk = match chunk_result {
@@ -489,14 +488,15 @@ impl OpenCodeClient {
                             message_roles.insert(msg_id, role);
                         }
 
+                        // Always send usage events (for both user and assistant)
                         let tokens = info.get("tokens").cloned();
                         let cost = info.get("cost").and_then(|v| v.as_f64());
 
                         if let Some(t) = tokens.clone() {
-                            last_tokens = Some(t);
+                            last_tokens = Some(t.clone());
                             last_cost = cost;
                             let _ = channel.send(OcStreamEvent::Usage {
-                                tokens: tokens.unwrap(),
+                                tokens: t,
                                 cost,
                             });
                         }
@@ -698,20 +698,16 @@ impl OpenCodeClient {
                                     .to_string();
                                 let _ = channel.send(OcStreamEvent::StepFinish { reason: reason.clone() });
 
+                                // Extract tokens from step-finish part (it has tokens/cost in its keys)
+                                let step_tokens = part.get("tokens").cloned();
+                                let step_cost = part.get("cost").and_then(|v| v.as_f64());
+                                if let Some(t) = step_tokens {
+                                    last_tokens = Some(t);
+                                    last_cost = step_cost;
+                                }
+
                                 if reason == "stop" {
-                                    let full_text = if accumulated_text.is_empty() {
-                                        "[Agent completed — check the file tree for changes]".to_string()
-                                    } else {
-                                        accumulated_text.clone()
-                                    };
-                                    let _ = channel.send(OcStreamEvent::Done {
-                                        full_text: full_text.clone(),
-                                        tokens: last_tokens.clone(),
-                                        cost: last_cost,
-                                    });
-                                    if let Some(ref tx) = done_tx {
-                                        let _ = tx.send((full_text, last_tokens.clone(), last_cost)).await;
-                                    }
+                                    step_stopped = true;
                                 }
                             }
                             _ => {}
@@ -744,6 +740,23 @@ impl OpenCodeClient {
                                 _ => st.to_string(),
                             };
                             let _ = channel.send(OcStreamEvent::Status { message: msg });
+
+                            // Emit Done when session goes idle AND step has stopped
+                            if st == "idle" && step_stopped {
+                                let full_text = if accumulated_text.is_empty() {
+                                    "[Agent completed — check the file tree for changes]".to_string()
+                                } else {
+                                    accumulated_text.clone()
+                                };
+                                let _ = channel.send(OcStreamEvent::Done {
+                                    full_text: full_text.clone(),
+                                    tokens: last_tokens.clone(),
+                                    cost: last_cost,
+                                });
+                                if let Some(ref tx) = done_tx {
+                                    let _ = tx.send((full_text, last_tokens.clone(), last_cost)).await;
+                                }
+                            }
                         }
                     }
                     "session.error" => {

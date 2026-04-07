@@ -690,7 +690,7 @@ export default function App() {
   const suppressAutoLoadSessionRef = useRef<string | null>(null);
 
   const { messages, isStreaming, isLoading, status, send, loadMessages, clearMessages, getSessionUsage } = useChat();
-  const { sessions, activeSessionId, createSession, deleteSession, selectSession, loadSessions } =
+  const { sessions, activeSessionId, createSession, deleteSession, selectSession } =
     useSessions();
   const { files, loadDirectory } = useFileTree();
   const git = useGit(true, 5000);
@@ -763,9 +763,9 @@ export default function App() {
       return;
     }
 
-    clearMessages();
+    // Don't clear messages - just reload to preserve current tokens
     loadMessages(activeSessionId);
-  }, [activeSessionId, clearMessages, loadMessages]);
+  }, [activeSessionId, loadMessages]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -795,9 +795,9 @@ export default function App() {
   }, [isStreaming]);
 
   const handleSend = useCallback(async () => {
-    const text = input.trim();
-    if (!text || isStreaming || !config?.model) return;
+    if (!input.trim() || isStreaming || !config?.model) return;
 
+    const text = input.trim();
     let sessionId = activeSessionId;
 
     if (!sessionId) {
@@ -810,7 +810,6 @@ export default function App() {
 
     await send(sessionId, text, 'general');
     setInput('');
-    await loadSessions();
   }, [input, isStreaming, config?.model, activeSessionId, createSession, send]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

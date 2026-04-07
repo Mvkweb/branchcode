@@ -62,6 +62,16 @@ export function useChat() {
   const loadingRef = useRef(false);
   const loadRequestRef = useRef(0);
   const streamingSessionRef = useRef<string | null>(null);
+  const lastUsageRef = useRef<SessionUsage>({
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    totalTokens: 0,
+    contextTokens: 0,
+    cost: 0,
+  });
 
   const loadMessages = useCallback(async (sessionId: string) => {
     const requestId = ++loadRequestRef.current;
@@ -290,7 +300,6 @@ export function useChat() {
               msg.streaming
                 ? {
                     ...msg,
-                    // Use accumulated streamContentRef, not event.data.full_text (may have reasoning mixed in)
                     content: streamContentRef.current || event.data.full_text || '',
                     streaming: false,
                     reasoning: reasoningRef.current || undefined,
@@ -306,12 +315,17 @@ export function useChat() {
                       fileEditsRef.current.length > 0
                         ? [...fileEditsRef.current]
                         : undefined,
-                    tokens: doneTokens,
-                    cost: doneCost,
+                    tokens: doneTokens || msg.tokens,
+                    cost: doneCost ?? msg.cost,
                   }
                 : msg
             );
             
+            // Reconcile with canonical backend state so final tokens/cost are correct
+            setTimeout(() => {
+              void loadMessages(sessionId);
+            }, 500);
+
             // Trigger git refresh after chat completes
             window.dispatchEvent(new CustomEvent('git-refresh'));
             break;
@@ -323,7 +337,7 @@ export function useChat() {
 
               updateAssistant((msg) =>
                 msg.streaming
-                  ? { ...msg, tokens: usageTokens, cost: usageCost }
+                  ? { ...msg, tokens: usageTokens, cost: usageCost ?? msg.cost }
                   : msg
               );
             }
@@ -362,7 +376,7 @@ export function useChat() {
         );
       }
     },
-    [isStreaming]
+    [isStreaming, loadMessages]
   );
 
   const clearMessages = useCallback(() => {
@@ -382,8 +396,6 @@ export function useChat() {
     let cacheWriteTokens = 0;
     let cost = 0;
 
-    // Only count the LAST assistant message's tokens (current turn)
-    // Previous turns are already spent - we don't want to double-count
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
       if (msg && msg.role === 'assistant' && msg.tokens) {
@@ -393,16 +405,14 @@ export function useChat() {
         cacheReadTokens += msg.tokens.cacheRead;
         cacheWriteTokens += msg.tokens.cacheWrite;
         cost += msg.cost || 0;
-        break; // Only count the most recent assistant message
+        break;
       }
     }
 
-    // contextTokens = input + cache (what's sent to the model, for % calculation)
     const contextTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
-    // totalTokens = everything (for display/spent)
     const totalTokens = inputTokens + outputTokens + reasoningTokens + cacheReadTokens + cacheWriteTokens;
 
-    return {
+    const result: SessionUsage = {
       inputTokens,
       outputTokens,
       reasoningTokens,
@@ -412,6 +422,12 @@ export function useChat() {
       contextTokens,
       cost,
     };
+
+    if (result.totalTokens > 0) {
+      lastUsageRef.current = result;
+    }
+
+    return result.totalTokens > 0 ? result : lastUsageRef.current;
   }, [messages]);
 
   return { messages, isStreaming, isLoading, status, send, loadMessages, clearMessages, getSessionUsage };
