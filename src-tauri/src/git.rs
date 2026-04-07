@@ -115,8 +115,8 @@ impl GitService {
 
             match (index_status, worktree_status) {
                 ('?', '?') => untracked.push(file),
-                (' ', 'M') | ('M', ' ') | ('M', 'M') => modified.push(file),
-                ('A', _) | ('M', ' ') | (' ', 'A') => staged.push(file),
+                ('M', ' ') | ('M', 'M') | (' ', 'M') => modified.push(file),
+                ('A', _) | (' ', 'A') => staged.push(file),
                 ('D', _) => staged.push(file),
                 ('R', _) => staged.push(file),
                 ('C', _) => staged.push(file),
@@ -140,7 +140,7 @@ impl GitService {
     }
 
     pub fn get_diff(&self, file_path: &str) -> Result<GitDiff, String> {
-        let output = self.run_git(&["diff", "--no-color", "--", file_path])?;
+        let output = self.run_git(&["diff", "HEAD", "--no-color", "--", file_path])?;
 
         let (additions, deletions) = Self::parse_diff_stats(&output);
 
@@ -239,7 +239,7 @@ impl GitService {
     }
 
     pub fn get_diff_stats(&self) -> Result<Vec<GitFile>, String> {
-        let output = self.run_git(&["diff", "--stat", "--no-color"])?;
+        let output = self.run_git(&["diff", "HEAD", "--stat", "--no-color"])?;
         let lines: Vec<&str> = output.lines().collect();
 
         let mut files: Vec<GitFile> = vec![];

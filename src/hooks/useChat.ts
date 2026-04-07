@@ -80,6 +80,13 @@ export function useChat() {
     try {
       const ocMessages = await getMessages(sessionId);
 
+      console.log('Backend returned messages count:', ocMessages.length);
+      if (ocMessages.length > 0) {
+        const firstMsg = ocMessages[0];
+        console.log('First message parts count:', firstMsg?.parts?.length || 0);
+        console.log('First message data:', JSON.stringify(firstMsg, null, 2).substring(0, 2000));
+      }
+
       if (requestId !== loadRequestRef.current) return;
       if (streamingSessionRef.current === sessionId) return;
 
@@ -108,19 +115,19 @@ export function useChat() {
             textContent += textValue;
           } else if (partType === 'reasoning' || partType === 'thinking' || partType === 'thought') {
             reasoningContent += textValue;
-          } else if (partType === 'tool') {
+          } else if (partType === 'tool' || partType === 'tool_call') {
             const tcName = p.name || p.tool || 'unknown';
             toolCalls.push({
               name: tcName,
               input: typeof p.input === 'string' ? p.input : '',
               status: p.status || 'completed',
             });
-          } else if (partType === 'tool_result' || partType === 'tool_result') {
+          } else if (partType === 'tool_result' || partType === 'tool-call-result') {
             toolResults.push({
               name: p.name || p.tool || 'unknown',
               output: typeof p.output === 'string' ? p.output : '',
             });
-          } else if (partType === 'file') {
+          } else if (partType === 'file' || partType === 'file_edit') {
             const path = p.path || p.file || '';
             if (path) fileEdits.push(path);
           } else if (textValue && !partType) {
@@ -129,10 +136,11 @@ export function useChat() {
           }
         }
 
-        // Debug: log part types for first message
+        // Debug: log all part types for first message
         if (i === startIdx) {
           const debug = parts.map((p: any) => ({ 
-            type: p.type || p.part_type, 
+            type: p.type || p.part_type || p.partType,
+            name: p.name || p.tool,
             hasText: !!(p.text || p.content),
             text: (p.text || p.content || '').substring(0, 100)
           }));
@@ -321,10 +329,8 @@ export function useChat() {
                 : msg
             );
             
-            // Reconcile with canonical backend state so final tokens/cost are correct
-            setTimeout(() => {
-              void loadMessages(sessionId);
-            }, 500);
+            // Skip reconciliation - streaming already has correct toolCalls/fileEdits, 
+            // and backend doesn't return them in a parseable format
 
             // Trigger git refresh after chat completes
             window.dispatchEvent(new CustomEvent('git-refresh'));

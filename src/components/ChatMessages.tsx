@@ -509,9 +509,9 @@ export function ChatMessages({ message }: Props) {
           </div>
         )}
 
-      {/* Tool Activity Card (for complex multi-tool flows) */}
+      {/* Tool Activity Card */}
       {hasToolActivity &&
-        ((message.toolCalls?.length ?? 0) > 3 || (message.toolResults?.length ?? 0) > 0) && (
+        ((message.toolCalls?.length ?? 0) > 0 || (message.fileEdits?.length ?? 0) > 0 || (message.toolResults?.length ?? 0) > 0) && (
           <ToolActivityCard
             toolCalls={message.toolCalls}
             toolResults={message.toolResults}
