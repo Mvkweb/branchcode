@@ -77,8 +77,7 @@ const BuildIcon = ({ className, size = 16 }: { className?: string; size?: number
   </svg>
 );
 
-function ModeSelector() {
-  const [mode, setMode] = useState<'plan' | 'build'>('build');
+function ModeSelector({ mode, onChange }: { mode: 'plan' | 'build', onChange: (mode: 'plan' | 'build') => void }) {
   const [hovered, setHovered] = useState(false);
 
   const showPlan = hovered || mode === 'plan';
@@ -97,7 +96,7 @@ function ModeSelector() {
           opacity: showPlan ? 1 : 0,
         }}
         transition={{ type: 'spring', stiffness: 500, damping: 35 }}
-        onClick={() => setMode('plan')}
+        onClick={() => onChange('plan')}
         className={`relative flex items-center justify-center h-full transition-colors overflow-hidden ${
           mode === 'plan' 
             ? (hovered ? 'bg-[#2a2a2a] text-white' : 'text-neutral-200') 
@@ -117,7 +116,7 @@ function ModeSelector() {
           opacity: showBuild ? 1 : 0,
         }}
         transition={{ type: 'spring', stiffness: 500, damping: 35 }}
-        onClick={() => setMode('build')}
+        onClick={() => onChange('build')}
         className={`relative flex items-center justify-center h-full transition-colors overflow-hidden ${
           mode === 'build' 
             ? (hovered ? 'bg-[#2a2a2a] text-white' : 'text-neutral-200') 
@@ -682,6 +681,7 @@ export default function App() {
   const [showGitPanel, setShowGitPanel] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
+  const [appMode, setAppMode] = useState<'plan' | 'build'>('build');
 
   const isVisible = isPinned || isHovered;
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -808,9 +808,9 @@ export default function App() {
       suppressAutoLoadSessionRef.current = sessionId;
     }
 
-    await send(sessionId, text, 'general');
+    await send(sessionId, text, appMode);
     setInput('');
-  }, [input, isStreaming, config?.model, activeSessionId, createSession, send]);
+  }, [input, isStreaming, config?.model, activeSessionId, createSession, send, appMode]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -1189,7 +1189,7 @@ export default function App() {
                         <Layers size={16} />
                       </button>
                       <div className="h-3 w-px bg-[#2a2a2a]" />
-                      <ModeSelector />
+                      <ModeSelector mode={appMode} onChange={setAppMode} />
                       <button 
                         onClick={() => setShowGitPanel(!showGitPanel)}
                         className={`flex items-center gap-1.5 text-[13px] transition-colors p-1 rounded-md ${

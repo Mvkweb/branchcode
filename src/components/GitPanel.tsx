@@ -42,8 +42,8 @@ const statusIcons: Record<string, React.ReactNode> = {
 };
 
 // Fast, snappy transition for UI elements
-const fastTransition = { duration: 0.15, ease: "easeOut" };
-const springTransition = { type: "spring", bounce: 0, duration: 0.3 };
+const fastTransition = { duration: 0.15 };
+const springTransition = { type: "spring", bounce: 0, duration: 0.3 } as const;
 
 function FileRow({
   file,

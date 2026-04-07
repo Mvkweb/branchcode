@@ -19,8 +19,11 @@ Thumbs.db
 Desktop.ini
 
 # Dependencies / Repos
-openchamber/
+
 bun.lockb
 .output/
 .vercel/
 .turbo/
+
+# Repositories
+openchamber/

@@ -1,1037 +1,658 @@
-import React, { ReactNode, useEffect, useState } from 'react';
+import React, { ReactNode, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 
 type SectionKey =
-  | 'workspace'
-  | 'appearance'
-  | 'models'
-  | 'shortcuts'
-  | 'notifications'
-  | 'privacy'
-  | 'labs';
+  | 'appearance' | 'chat' | 'notifications' | 'sessions'
+  | 'shortcuts' | 'git' | 'projects' | 'agents'
+  | 'commands' | 'mcp' | 'providers' | 'usage'
+  | 'skills' | 'voice' | 'privacy';
+
+type PermissionState = 'allow' | 'deny' | 'ask';
 
 type ToggleKey =
-  | 'autoTitle'
-  | 'restoreDrafts'
-  | 'subtleMotion'
-  | 'dottedCanvas'
-  | 'sidebarBadges'
-  | 'quietLabels'
-  | 'desktopAlerts'
-  | 'mentionAlerts'
-  | 'soundCues'
-  | 'usageTelemetry'
-  | 'localHistory'
-  | 'redactedAnalytics'
-  | 'smartRouting'
-  | 'multimodalUploads'
-  | 'slashCommandBar'
-  | 'fuzzySearch'
-  | 'experimentalComposer'
-  | 'speculativeResponses'
-  | 'inlineDiffs';
+  | 'showReasoning' | 'stickyHeader' | 'showToolIcons' | 'showDotfiles'
+  | 'queueMessages' | 'persistDrafts' | 'spellcheck' | 'desktopAlerts'
+  | 'mentionAlerts' | 'soundCues' | 'usageTelemetry' | 'localHistory'
+  | 'terminalQuickKeys' | 'sendUsageReports';
 
 type ToggleState = Record<ToggleKey, boolean>;
 
 type SettingsState = {
-  startupMode: string;
-  landingView: string;
-  inputWidth: string;
-  themeMode: string;
-  density: string;
-  reasoningProfile: string;
-  digestMode: string;
-  contextDepth: number;
-  replyLength: number;
-  cornerRadius: number;
-  toolBudget: number;
-  contextWindow: number;
+  selectedAgent: string;
+  colorMode: string;
+  lightTheme: string;
+  darkTheme: string;
+  appName: string;
+  renderMode: string;
+  messageRendering: string;
+  mermaidRendering: string;
+  diffLayout: string;
+  diffViewMode: string;
   defaultModel: string;
+  interfaceFontSize: number;
+  terminalFontSize: number;
+  spacingDensity: number;
+  inputBarOffset: number;
   toggles: ToggleState;
+  permissions: Record<string, PermissionState>;
 };
-
-type Icon = React.ComponentType<React.SVGProps<SVGSVGElement>>;
 
 function cx(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(' ');
 }
 
-// icons
+// ─── Icons ────────────────────────────────────────────────────────────────────
 
-const IconWorkspace: Icon = (p) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" {...p}>
-    <rect x="3.5" y="4" width="17" height="16" rx="2.5" />
-    <path d="M3.5 9.5h17M9.5 20V9.5" />
-  </svg>
-);
+const I = {
+  Appearance: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><circle cx="12" cy="12" r="3"/><path d="M12 2v2.5M12 19.5V22M4.93 4.93l1.77 1.77M17.3 17.3l1.77 1.77M2 12h2.5M19.5 12H22M4.93 19.07l1.77-1.77M17.3 6.7l1.77-1.77"/></svg>,
+  Chat: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>,
+  Bell: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0"/></svg>,
+  Clock: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>,
+  Keyboard: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/></svg>,
+  Git: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>,
+  Folder: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>,
+  Agent: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><circle cx="12" cy="8" r="4"/><path d="M6 20v-1a6 6 0 0 1 12 0v1"/></svg>,
+  Command: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 6 0 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 6 0V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3"/></svg>,
+  Plug: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-5 0v-15A2.5 2.5 0 0 1 9.5 2zM14.5 2A2.5 2.5 0 0 1 17 4.5v15a2.5 2.5 0 0 1-5 0v-15A2.5 2.5 0 0 1 14.5 2z"/></svg>,
+  Provider: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>,
+  BarChart: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M3 3v18h18M7 16l4-4 4 4 4-4"/></svg>,
+  Star: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>,
+  Mic: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></svg>,
+  Globe: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10A15.3 15.3 0 0 1 12 2z"/></svg>,
+  X: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M18 6 6 18M6 6l12 12"/></svg>,
+  ChevronDown: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="m6 9 6 6 6-6"/></svg>,
+  Plus: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M12 5v14M5 12h14"/></svg>,
+  RotateCcw: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>,
+  Info: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>,
+  Check: (p: any) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M20 6 9 17l-5-5"/></svg>,
+};
 
-const IconAppearance: Icon = (p) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" {...p}>
-    <circle cx="12" cy="12" r="3.5" />
-    <path d="M12 3v2.5M12 18.5V21M4.2 4.2l1.8 1.8M18 18l1.8 1.8M3 12h2.5M18.5 12H21M4.2 19.8l1.8-1.8M18 6l1.8-1.8" />
-  </svg>
-);
+// ─── Nav config ───────────────────────────────────────────────────────────────
 
-const IconModels: Icon = (p) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" {...p}>
-    <path d="M12 3L3 7.5v9L12 21l9-4.5v-9L12 3z" />
-    <path d="M12 3v18M3 7.5l9 4.5 9-4.5" />
-  </svg>
-);
-
-const IconShortcuts: Icon = (p) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" {...p}>
-    <rect x="3.5" y="6" width="17" height="12" rx="2.5" />
-    <path d="M7 10h.01M12 10h.01M17 10h.01M7 14h10" />
-  </svg>
-);
-
-const IconNotifications: Icon = (p) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" {...p}>
-    <path d="M6 9a6 6 0 1 1 12 0c0 7 3 8 3 8H3s3-1 3-8" />
-    <path d="M10 20a2 2 0 0 0 4 0" />
-  </svg>
-);
-
-const IconPrivacy: Icon = (p) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" {...p}>
-    <path d="M12 3l7 3v5c0 4.8-2.8 8.6-7 10-4.2-1.4-7-5.2-7-10V6l7-3Z" />
-    <path d="M9.5 12l1.7 1.7 3.8-4.2" />
-  </svg>
-);
-
-const IconLabs: Icon = (p) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" {...p}>
-    <path d="M10 3v5l-5.5 9.5A2.5 2.5 0 0 0 6.7 21h10.6a2.5 2.5 0 0 0 2.2-3.5L14 8V3" />
-    <path d="M8.5 13h7" />
-  </svg>
-);
-
-const IconLogo: Icon = (p) => (
-  <svg viewBox="0 0 24 24" fill="currentColor" {...p}>
-    <rect x="3" y="3" width="8" height="8" rx="2.2" />
-    <rect x="13" y="3" width="8" height="8" rx="2.2" />
-    <rect x="3" y="13" width="8" height="8" rx="2.2" />
-    <rect x="13" y="13" width="8" height="8" rx="2.2" />
-  </svg>
-);
-
-const IconClose: Icon = (p) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}>
-    <path d="M18 6 6 18M6 6l12 12" />
-  </svg>
-);
-
-const IconCheck: Icon = (p) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" {...p}>
-    <path d="m5 13 4 4L19 7" />
-  </svg>
-);
-
-// data
-
-const NAV: { key: SectionKey; label: string; description: string; icon: Icon }[] = [
-  { key: 'workspace', label: 'Workspace', description: 'Startup, composer, and project defaults.', icon: IconWorkspace },
-  { key: 'appearance', label: 'Appearance', description: 'Theme, density, and surface styling.', icon: IconAppearance },
-  { key: 'models', label: 'Models', description: 'Default model and routing behavior.', icon: IconModels },
-  { key: 'shortcuts', label: 'Shortcuts', description: 'Keyboard bindings and command bar.', icon: IconShortcuts },
-  { key: 'notifications', label: 'Notifications', description: 'Alerts and digest delivery.', icon: IconNotifications },
-  { key: 'privacy', label: 'Privacy', description: 'Local data, analytics, and cleanup.', icon: IconPrivacy },
-  { key: 'labs', label: 'Labs', description: 'Experimental features still in progress.', icon: IconLabs },
+const NAV: { key: SectionKey; label: string; icon: keyof typeof I; beta?: boolean }[] = [
+  { key: 'appearance', label: 'Appearance', icon: 'Appearance' },
+  { key: 'chat',       label: 'Chat',       icon: 'Chat' },
+  { key: 'notifications', label: 'Notifications', icon: 'Bell' },
+  { key: 'sessions',   label: 'Sessions',   icon: 'Clock' },
+  { key: 'shortcuts',  label: 'Shortcuts',  icon: 'Keyboard' },
+  { key: 'git',        label: 'Git',        icon: 'Git' },
+  { key: 'projects',   label: 'Projects',   icon: 'Folder' },
+  { key: 'agents',     label: 'Agents',     icon: 'Agent' },
+  { key: 'commands',   label: 'Commands',   icon: 'Command' },
+  { key: 'mcp',        label: 'MCP',        icon: 'Plug' },
+  { key: 'providers',  label: 'Providers',  icon: 'Provider' },
+  { key: 'usage',      label: 'Usage',      icon: 'BarChart' },
+  { key: 'skills',     label: 'Skills',     icon: 'Star' },
+  { key: 'voice',      label: 'Voice',      icon: 'Mic',    beta: true },
+  { key: 'privacy',    label: 'Remote Tunnel', icon: 'Globe', beta: true },
 ];
 
-const MODEL_OPTIONS = [
-  { id: 'mimo-v2-pro', name: 'MiMo V2 Pro', provider: 'Xiaomi', note: 'Fast, balanced' },
-  { id: 'mimo-v2-omni', name: 'MiMo V2 Omni', provider: 'Multimodal', note: 'Text and image' },
-  { id: 'core-lite', name: 'Core Lite', provider: 'Stealth', note: 'Short answers' },
-  { id: 'qwen-3.6-plus', name: 'Qwen 3.6 Plus', provider: 'Alibaba', note: 'Strong for code' },
-  { id: 'nemotron-3-super', name: 'Nemotron 3 Super', provider: 'NVIDIA', note: 'Heavier reasoning' },
-  { id: 'minimax-m2.5', name: 'MiniMax M2.5', provider: 'MiniMax', note: 'Best default' },
+// ─── Data ─────────────────────────────────────────────────────────────────────
+
+const AGENTS = [
+  { id: 'build',   name: 'build',   kind: 'system', desc: 'The default agent. Executes tools and edits.' },
+  { id: 'explore', name: 'explore', kind: 'system', desc: 'Fast agent specialized for exploration.' },
+  { id: 'general', name: 'general', kind: 'system', desc: 'General-purpose agent for mixed tasks.' },
+  { id: 'plan',    name: 'plan',    kind: 'system', desc: 'Read-only planning. No edits or commands.' },
 ];
 
-const SHORTCUTS_LIST = [
-  { label: 'Command palette', keys: ['⌘', 'K'] },
-  { label: 'Focus composer', keys: ['⌘', 'I'] },
-  { label: 'New session', keys: ['⌘', 'N'] },
-  { label: 'Open settings', keys: ['⌘', ','] },
-  { label: 'Toggle sidebar', keys: ['⌘', 'B'] },
-  { label: 'Toggle panel', keys: ['⌘', 'J'] },
+const TOOL_ROWS: { label: string; key: string; mono: string; meta?: string }[] = [
+  { label: 'Default',            key: '*',                  mono: '*' },
+  { label: 'Apply Patch',        key: 'apply_patch',        mono: 'apply_patch' },
+  { label: 'Bash',               key: 'bash',               mono: 'bash' },
+  { label: 'CodeSearch',         key: 'codesearch',         mono: 'codesearch' },
+  { label: 'Doom Loop',          key: 'doom_loop',          mono: 'doom_loop' },
+  { label: 'Edit',               key: 'edit',               mono: 'edit' },
+  { label: 'External Directory', key: 'external_directory', mono: 'external_directory', meta: 'Global: ask · Rules: 1 allow' },
+  { label: 'Glob',               key: 'glob',               mono: 'glob' },
+  { label: 'Grep',               key: 'grep',               mono: 'grep' },
+  { label: 'List',               key: 'list',               mono: 'list' },
+  { label: 'Lsp',                key: 'lsp',                mono: 'lsp' },
+  { label: 'Plan Enter',         key: 'plan_enter',         mono: 'plan_enter' },
+  { label: 'Plan Exit',          key: 'plan_exit',          mono: 'plan_exit' },
 ];
 
-const RECENT_PROJECTS = [
-  { name: '3D Solar System', sub: 'Three.js scene', updated: '3m ago' },
-  { name: 'Kanban Landing', sub: 'Marketing page', updated: '21m ago' },
-  { name: 'Notes Agent', sub: 'Structured notes', updated: 'Yesterday' },
-];
-
-const LAB_FLAGS: { key: ToggleKey; label: string; badge: string; desc: string }[] = [
-  {
-    key: 'experimentalComposer',
-    label: 'Expanded composer',
-    badge: 'alpha',
-    desc: 'A roomier composer with richer attachments.',
-  },
-  {
-    key: 'speculativeResponses',
-    label: 'Speculative streaming',
-    badge: 'beta',
-    desc: 'Render earlier structure to improve perceived speed.',
-  },
-  {
-    key: 'inlineDiffs',
-    label: 'Inline code diffs',
-    badge: 'preview',
-    desc: 'Show patch-style edits directly in replies.',
-  },
-];
-
-function createDefaultSettings(): SettingsState {
+function createDefault(): SettingsState {
   return {
-    startupMode: 'resume',
-    landingView: 'canvas',
-    inputWidth: 'centered',
-    themeMode: 'midnight',
-    density: 'comfortable',
-    reasoningProfile: 'balanced',
-    digestMode: 'weekly',
-    contextDepth: 8,
-    replyLength: 3,
-    cornerRadius: 16,
-    toolBudget: 5,
-    contextWindow: 128,
-    defaultModel: 'minimax-m2.5',
+    selectedAgent: 'explore',
+    colorMode: 'system',
+    lightTheme: 'Flexoki',
+    darkTheme: 'Flexoki',
+    appName: 'OpenChamber – AI Coding Assistant',
+    renderMode: 'live',
+    messageRendering: 'markdown',
+    mermaidRendering: 'svg',
+    diffLayout: 'inline',
+    diffViewMode: 'all-files',
+    defaultModel: 'MiniMax M2.5',
+    interfaceFontSize: 100,
+    terminalFontSize: 13,
+    spacingDensity: 100,
+    inputBarOffset: 0,
     toggles: {
-      autoTitle: true,
-      restoreDrafts: true,
-      subtleMotion: true,
-      dottedCanvas: true,
-      sidebarBadges: false,
-      quietLabels: true,
-      desktopAlerts: true,
-      mentionAlerts: true,
-      soundCues: false,
-      usageTelemetry: false,
-      localHistory: true,
-      redactedAnalytics: true,
-      smartRouting: true,
-      multimodalUploads: true,
-      slashCommandBar: true,
-      fuzzySearch: true,
-      experimentalComposer: true,
-      speculativeResponses: false,
-      inlineDiffs: true,
+      showReasoning: false, stickyHeader: true, showToolIcons: true,
+      showDotfiles: true, queueMessages: true, persistDrafts: true,
+      spellcheck: false, desktopAlerts: true, mentionAlerts: true,
+      soundCues: false, usageTelemetry: false, localHistory: true,
+      terminalQuickKeys: false, sendUsageReports: true,
+    },
+    permissions: {
+      '*': 'deny', apply_patch: 'deny', bash: 'allow', codesearch: 'allow',
+      doom_loop: 'ask', edit: 'deny', external_directory: 'ask',
+      glob: 'allow', grep: 'allow', list: 'allow', lsp: 'deny',
+      plan_enter: 'deny', plan_exit: 'deny',
     },
   };
 }
 
-// primitives
+// ─── Design tokens ────────────────────────────────────────────────────────────
+// Surface hierarchy: bg-0 < bg-1 < bg-2 < bg-3
+// bg-0  #080808  deepest chrome
+// bg-1  #0f0f0f  sidebar
+// bg-2  #141414  content area
+// bg-3  #1a1a1a  elevated cards / inputs
+// border: #222 default, #2e2e2e slightly lifted
+// text: #f0f0f0 primary, #888 secondary, #444 muted
 
-function PanelSection({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="space-y-3">
-      <h3 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
-        {title}
-      </h3>
-      {children}
-    </section>
-  );
+// ─── Primitives ───────────────────────────────────────────────────────────────
+
+function Rule({ className }: { className?: string }) {
+  return <div className={cx('h-px bg-white/[0.06]', className)} />;
 }
 
-function Surface({
-  children,
-  className = '',
-  style,
-}: {
-  children: ReactNode;
-  className?: string;
-  style?: React.CSSProperties;
-}) {
+function Section({ title, children }: { title?: string; children: ReactNode }) {
   return (
-    <div
-      className={cx(
-        'rounded-2xl border border-white/[0.08] bg-white/[0.03] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]',
-        className
+    <div className="space-y-5">
+      {title && (
+        <h3 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-white/25">
+          {title}
+        </h3>
       )}
-      style={style}
-    >
       {children}
     </div>
   );
 }
 
-function SettingRow({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex flex-col gap-3 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-      <div className="min-w-0">
-        <div className="text-sm font-medium text-neutral-200">{title}</div>
-        {description && (
-          <p className="mt-1 text-xs leading-5 text-neutral-500">{description}</p>
-        )}
-      </div>
-      <div className="shrink-0">{children}</div>
-    </div>
-  );
-}
-
-function SegmentedControl({
-  id,
-  value,
-  onChange,
-  options,
-}: {
-  id: string;
-  value: string;
-  onChange: (value: string) => void;
-  options: { label: string; value: string }[];
-}) {
-  return (
-    <div
-      aria-label={id}
-      className="inline-flex rounded-xl border border-white/[0.08] bg-white/[0.03] p-0.5"
-    >
-      {options.map((option) => {
-        const active = option.value === value;
-
-        return (
-          <button
-            key={option.value}
-            type="button"
-            onClick={() => onChange(option.value)}
-            className={cx(
-              'relative rounded-[10px] px-3 py-1.5 text-xs font-medium transition-colors',
-              active ? 'text-white' : 'text-neutral-500 hover:text-neutral-200'
-            )}
-          >
-            {active && (
-              <motion.span
-                layoutId={`seg-${id}`}
-                transition={{ type: 'spring', stiffness: 420, damping: 34 }}
-                className="absolute inset-0 rounded-[10px] border border-white/[0.09] bg-white/[0.08]"
-              />
-            )}
-            <span className="relative z-10">{option.label}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function Switch({
-  checked,
-  onChange,
-}: {
-  checked: boolean;
-  onChange: () => void;
-}) {
-  const reduceMotion = useReducedMotion();
-
+function PermTag({ state, onClick }: { state: PermissionState; onClick: () => void }) {
+  const map = {
+    allow: 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20',
+    deny:  'bg-red-500/10    text-red-400    hover:bg-red-500/20',
+    ask:   'bg-amber-500/10  text-amber-400  hover:bg-amber-500/20',
+  } as const;
   return (
     <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      onClick={onChange}
+      onClick={onClick}
       className={cx(
-        'relative h-6 w-10 rounded-full border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/20',
-        checked
-          ? 'border-white/[0.14] bg-white/[0.14]'
-          : 'border-white/[0.08] bg-white/[0.03]'
+        'min-w-[54px] rounded-[5px] px-2.5 py-1 text-center text-[11px] font-semibold tracking-wide transition-colors',
+        map[state]
       )}
     >
-      <motion.span
-        animate={{ x: checked ? 16 : 0 }}
-        transition={
-          reduceMotion
-            ? { duration: 0 }
-            : { type: 'spring', stiffness: 500, damping: 32 }
-        }
-        className="absolute left-[3px] top-[3px] h-[18px] w-[18px] rounded-full bg-white shadow-sm"
-      />
+      {state.charAt(0).toUpperCase() + state.slice(1)}
     </button>
   );
 }
 
-function Stepper({
-  value,
-  onChange,
-  min = 0,
-  max = 100,
-  step = 1,
-  suffix = '',
-}: {
-  value: number;
-  onChange: (value: number) => void;
-  min?: number;
-  max?: number;
-  step?: number;
-  suffix?: string;
+function Stepper({ value, onChange, min = 0, max = 999, step = 1 }: {
+  value: number; onChange: (v: number) => void;
+  min?: number; max?: number; step?: number;
 }) {
   return (
-    <div className="inline-flex items-center overflow-hidden rounded-xl border border-white/[0.08] bg-white/[0.03] text-sm">
+    <div className="flex items-center gap-0">
       <button
-        type="button"
-        aria-label="Decrease value"
         onClick={() => onChange(Math.max(min, value - step))}
-        className="px-3 py-2 text-neutral-500 transition-colors hover:text-white"
+        className="flex h-[30px] w-8 items-center justify-center rounded-l-[6px] border border-white/[0.09] bg-white/[0.04] text-white/40 transition-colors hover:bg-white/[0.07] hover:text-white/70"
       >
-        −
+        <span className="text-[13px] leading-none">−</span>
       </button>
-
-      <div className="min-w-[76px] border-x border-white/[0.06] px-3 py-2 text-center text-neutral-200">
+      <div className="flex h-[30px] w-14 items-center justify-center border-y border-white/[0.09] bg-white/[0.03] text-[12px] font-medium text-white/70">
         {value}
-        {suffix}
       </div>
-
       <button
-        type="button"
-        aria-label="Increase value"
         onClick={() => onChange(Math.min(max, value + step))}
-        className="px-3 py-2 text-neutral-500 transition-colors hover:text-white"
+        className="flex h-[30px] w-8 items-center justify-center rounded-r-[6px] border border-white/[0.09] bg-white/[0.04] text-white/40 transition-colors hover:bg-white/[0.07] hover:text-white/70"
       >
-        +
+        <span className="text-[13px] leading-none">+</span>
+      </button>
+      <button className="ml-2 text-white/20 transition-colors hover:text-white/50">
+        <I.RotateCcw className="h-3.5 w-3.5" />
       </button>
     </div>
   );
 }
 
-function Kbd({ children }: { children: ReactNode }) {
+function CheckItem({ checked, onChange, label, desc }: {
+  checked: boolean; onChange: () => void; label: string; desc?: string;
+}) {
   return (
-    <span className="rounded-md border border-white/[0.09] bg-white/[0.05] px-2 py-1 font-mono text-[11px] text-neutral-300">
-      {children}
-    </span>
+    <button
+      type="button"
+      onClick={onChange}
+      className="flex w-full items-start gap-3 text-left"
+    >
+      <div className={cx(
+        'mt-[2px] flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-[4px] border transition-all duration-150',
+        checked
+          ? 'border-white/30 bg-white/15 text-white'
+          : 'border-white/10 bg-transparent text-transparent hover:border-white/20'
+      )}>
+        <I.Check className="h-2.5 w-2.5" />
+      </div>
+      <div>
+        <div className="text-[13px] text-white/75">{label}</div>
+        {desc && <div className="mt-0.5 text-[12px] leading-relaxed text-white/30">{desc}</div>}
+      </div>
+    </button>
   );
 }
 
-function Tag({ children }: { children: ReactNode }) {
+function RadioItem({ checked, label, onClick }: { checked: boolean; label: string; onClick: () => void }) {
   return (
-    <span className="rounded-md border border-white/[0.08] bg-white/[0.04] px-1.5 py-0.5 text-[10px] uppercase tracking-[0.12em] text-neutral-500">
-      {children}
-    </span>
+    <button type="button" onClick={onClick} className="flex items-center gap-2.5">
+      <div className={cx(
+        'flex h-[15px] w-[15px] items-center justify-center rounded-full border transition-all duration-150',
+        checked ? 'border-white/40 bg-white/10' : 'border-white/10 hover:border-white/25'
+      )}>
+        {checked && <div className="h-[6px] w-[6px] rounded-full bg-white/80" />}
+      </div>
+      <span className={cx('text-[13px]', checked ? 'text-white/80' : 'text-white/40 hover:text-white/60')}>
+        {label}
+      </span>
+    </button>
   );
 }
 
-// main
+function ModeChip({ value, active, onClick }: { value: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={cx(
+        'rounded-full border px-3.5 py-1 text-[12px] font-medium transition-all duration-150',
+        active
+          ? 'border-white/20 bg-white/10 text-white/90'
+          : 'border-transparent text-white/30 hover:border-white/10 hover:text-white/60'
+      )}
+    >
+      {value}
+    </button>
+  );
+}
+
+function DropBtn({ value }: { value: string }) {
+  return (
+    <button className="flex h-8 items-center gap-1.5 rounded-[6px] border border-white/[0.09] bg-white/[0.04] px-3 text-[12px] text-white/60 transition-colors hover:bg-white/[0.07]">
+      {value} <I.ChevronDown className="h-3.5 w-3.5 text-white/25" />
+    </button>
+  );
+}
+
+function LineInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <input
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      className="h-9 flex-1 rounded-[6px] border border-white/[0.09] bg-white/[0.03] px-3 text-[13px] text-white/70 outline-none placeholder:text-white/20 focus:border-white/20 focus:bg-white/[0.05]"
+    />
+  );
+}
+
+// ─── Panels ───────────────────────────────────────────────────────────────────
+
+function AppearancePanel({ s, update, toggle }: { s: SettingsState; update: any; toggle: any }) {
+  return (
+    <div className="space-y-9">
+      <Section title="Color Mode">
+        <div className="flex gap-1.5">
+          {['system', 'light', 'dark'].map(m => (
+            <ModeChip key={m} value={m} active={s.colorMode === m} onClick={() => update('colorMode', m)} />
+          ))}
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-6">
+          <div className="flex items-center gap-2.5">
+            <span className="text-[12px] text-white/30">Light Theme</span>
+            <DropBtn value={s.lightTheme} />
+          </div>
+          <div className="flex items-center gap-2.5">
+            <span className="text-[12px] text-white/30">Dark Theme</span>
+            <DropBtn value={s.darkTheme} />
+          </div>
+        </div>
+        <button className="mt-2 flex items-center gap-1.5 text-[12px] text-white/40 underline underline-offset-2 hover:text-white/70">
+          Reload themes <I.Info className="h-3.5 w-3.5 text-white/25" />
+        </button>
+      </Section>
+
+      <Rule />
+
+      <Section title="App Identity">
+        <div>
+          <p className="mb-2 text-[12px] text-white/30">Install App Name — used by PWA installation process.</p>
+          <div className="flex items-center gap-2">
+            <LineInput value={s.appName} onChange={v => update('appName', v)} />
+            <button className="text-white/20 hover:text-white/50">
+              <I.RotateCcw className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      </Section>
+
+      <Rule />
+
+      <Section title="Spacing & Layout">
+        <div className="space-y-3.5">
+          {([
+            { label: 'Interface Font Size', key: 'interfaceFontSize' },
+            { label: 'Terminal Font Size',  key: 'terminalFontSize', min: 8, max: 32 },
+            { label: 'Spacing Density',     key: 'spacingDensity' },
+            { label: 'Input Bar Offset',    key: 'inputBarOffset', min: -100, max: 100, info: true },
+          ] as any[]).map(({ label, key, min = 0, max = 999, info }) => (
+            <div key={key} className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[13px] text-white/55">{label}</span>
+                {info && <I.Info className="h-3.5 w-3.5 text-white/20" />}
+              </div>
+              <Stepper value={s[key as keyof SettingsState] as number} onChange={v => update(key, v)} min={min} max={max} />
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      <Rule />
+
+      <Section title="Navigation">
+        <CheckItem
+          checked={s.toggles.terminalQuickKeys}
+          onChange={() => toggle('terminalQuickKeys')}
+          label="Terminal Quick Keys"
+        />
+      </Section>
+
+      <Rule />
+
+      <Section title="Privacy">
+        <CheckItem
+          checked={s.toggles.sendUsageReports}
+          onChange={() => toggle('sendUsageReports')}
+          label="Send anonymous usage reports"
+          desc="Helps us understand which app versions are actively used. Only version, platform, and runtime are collected — no personal data or code."
+        />
+      </Section>
+    </div>
+  );
+}
+
+function ChatPanel({ s, update, toggle }: { s: SettingsState; update: any; toggle: any }) {
+  return (
+    <div className="space-y-9">
+      <Section title="Chat Render Mode">
+        <div className="flex gap-3">
+          {['sorted', 'live'].map(mode => (
+            <button
+              key={mode}
+              onClick={() => update('renderMode', mode)}
+              className={cx(
+                'flex w-40 flex-col rounded-lg border p-3.5 text-left transition-all duration-150',
+                s.renderMode === mode
+                  ? 'border-white/20 bg-white/[0.06]'
+                  : 'border-white/[0.06] bg-white/[0.02] hover:border-white/[0.1]'
+              )}
+            >
+              <span className="mb-4 text-[12px] font-medium capitalize text-white/60">{mode}</span>
+              <div className="space-y-2">
+                {[0,1,2].map(i => (
+                  <div key={i} className="flex items-center gap-1.5">
+                    <div className="h-1.5 w-1.5 rounded-full bg-white/15" />
+                    <div className="h-1.5 flex-1 rounded-full bg-white/10" />
+                  </div>
+                ))}
+              </div>
+            </button>
+          ))}
+        </div>
+      </Section>
+
+      <Rule />
+
+      <div className="grid grid-cols-2 gap-x-10 gap-y-8">
+        {[
+          { title: 'User Message Rendering', key: 'messageRendering', opts: [{ id: 'markdown', label: 'Markdown' }, { id: 'plain', label: 'Plain text' }] },
+          { title: 'Mermaid Rendering',      key: 'mermaidRendering',  opts: [{ id: 'svg', label: 'SVG' }, { id: 'ascii', label: 'ASCII' }] },
+          { title: 'Diff Layout',            key: 'diffLayout',        opts: [{ id: 'dynamic', label: 'Dynamic' }, { id: 'inline', label: 'Always inline' }, { id: 'side-by-side', label: 'Always side-by-side' }] },
+          { title: 'Diff View Mode',         key: 'diffViewMode',      opts: [{ id: 'single-file', label: 'Single file' }, { id: 'all-files', label: 'All files' }] },
+        ].map(({ title, key, opts }) => (
+          <div key={key}>
+            <div className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-white/25">{title}</div>
+            <div className="space-y-2.5">
+              {opts.map(o => (
+                <RadioItem key={o.id} checked={s[key as keyof SettingsState] === o.id} label={o.label} onClick={() => update(key, o.id)} />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <Rule />
+
+      <Section title="Chat Behavior">
+        <div className="space-y-4">
+          {([
+            ['showReasoning',  'Show Reasoning Traces'],
+            ['stickyHeader',   'Sticky User Header'],
+            ['showToolIcons',  'Show Tool File Icons'],
+            ['showDotfiles',   'Show Dotfiles'],
+            ['queueMessages',  'Queue Messages by Default'],
+            ['persistDrafts',  'Persist Draft Messages'],
+            ['spellcheck',     'Enable Spellcheck in Text Inputs'],
+          ] as [ToggleKey, string][]).map(([key, label]) => (
+            <CheckItem key={key} checked={s.toggles[key]} onChange={() => toggle(key)} label={label} />
+          ))}
+        </div>
+      </Section>
+    </div>
+  );
+}
+
+function AgentsPanel({ s, update, cyclePermission }: { s: SettingsState; update: any; cyclePermission: (k: string) => void }) {
+  return (
+    <div className="flex h-full min-h-0">
+      {/* Sub-sidebar */}
+      <div className="flex w-[252px] shrink-0 flex-col border-r border-white/[0.06]">
+        <div className="p-4 pb-3">
+          <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-white/25">Workspace</p>
+          <button className="flex w-full items-center justify-between rounded-[7px] border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[13px] text-white/60 transition-colors hover:bg-white/[0.05]">
+            <div className="flex items-center gap-2">
+              <I.Folder className="h-3.5 w-3.5 text-white/30" />
+              <span>Batchcompiler</span>
+            </div>
+            <I.ChevronDown className="h-4 w-4 text-white/20" />
+          </button>
+          <div className="mt-3 flex items-center justify-between px-0.5">
+            <span className="text-[12px] text-white/25">Total 4</span>
+            <button className="text-white/20 transition-colors hover:text-white/60">
+              <I.Plus className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        <Rule />
+
+        <div className="flex-1 overflow-y-auto p-3">
+          <p className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-white/20">
+            Built-in Agents
+          </p>
+          <div className="space-y-0.5">
+            {AGENTS.map(a => {
+              const isActive = s.selectedAgent === a.id;
+              return (
+                <button
+                  key={a.id}
+                  onClick={() => update('selectedAgent', a.id)}
+                  className={cx(
+                    'relative w-full rounded-[7px] px-3 py-2 text-left transition-colors',
+                    isActive ? 'bg-white/[0.07]' : 'hover:bg-white/[0.04]'
+                  )}
+                >
+                  {isActive && (
+                    <motion.div
+                      layoutId="agent-active"
+                      className="absolute inset-0 rounded-[7px] bg-white/[0.07]"
+                      transition={{ type: 'spring', stiffness: 400, damping: 32 }}
+                    />
+                  )}
+                  <div className="relative flex items-center gap-2">
+                    <span className={cx('text-[13px]', isActive ? 'text-white/90 font-medium' : 'text-white/55')}>
+                      {a.name}
+                    </span>
+                    <span className="rounded border border-amber-500/20 bg-amber-500/8 px-1.5 py-px text-[10px] font-medium text-amber-400/80">
+                      {a.kind}
+                    </span>
+                  </div>
+                  <div className="relative mt-0.5 truncate text-[12px] text-white/25">{a.desc}</div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Detail pane */}
+      <div className="flex-1 overflow-y-auto">
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={s.selectedAgent}
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.14 }}
+            className="space-y-8 px-8 py-7"
+          >
+            {/* System prompt */}
+            <div>
+              <h3 className="mb-3 text-[13px] font-semibold text-white/70">System Prompt</h3>
+              <div className="rounded-lg border border-white/[0.07] bg-white/[0.02] p-4">
+                <pre className="whitespace-pre-wrap font-mono text-[12.5px] leading-relaxed text-white/50">
+<span className="text-white/75">You are a file search specialist. You excel at thoroughly
+navigating and exploring codebases.</span>
+
+Your strengths:
+- Rapidly finding files using glob patterns
+- Searching code and text with powerful regex patterns
+- Reading and analyzing file contents
+                </pre>
+              </div>
+            </div>
+
+            {/* Tool permissions */}
+            <div>
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className="text-[13px] font-semibold text-white/70">Tool Permissions</h3>
+                <button className="rounded-[6px] border border-white/[0.08] bg-white/[0.03] px-3 py-1 text-[11px] text-white/35 transition-colors hover:bg-white/[0.06] hover:text-white/70">
+                  advanced editor
+                </button>
+              </div>
+
+              <div className="overflow-hidden rounded-lg border border-white/[0.07]">
+                {TOOL_ROWS.map((row, i) => (
+                  <div
+                    key={row.key}
+                    className={cx(
+                      'flex items-center justify-between px-4 py-3 transition-colors hover:bg-white/[0.02]',
+                      i < TOOL_ROWS.length - 1 && 'border-b border-white/[0.04]'
+                    )}
+                  >
+                    <div className="flex min-w-0 flex-1 items-baseline gap-2.5">
+                      <span className="text-[13px] text-white/75">{row.label}</span>
+                      <span className="font-mono text-[11.5px] text-white/25">{row.mono}</span>
+                      {row.meta && (
+                        <span className="ml-1 text-[11px] text-white/20">{row.meta}</span>
+                      )}
+                    </div>
+                    <PermTag state={s.permissions[row.key] ?? 'deny'} onClick={() => cyclePermission(row.key)} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </motion.div>
+        </AnimatePresence>
+      </div>
+    </div>
+  );
+}
+
+function NotificationsPanel({ s, toggle }: { s: SettingsState; toggle: any }) {
+  return (
+    <div className="space-y-5">
+      <Section title="Alerts">
+        <div className="space-y-4">
+          <CheckItem checked={s.toggles.desktopAlerts}  onChange={() => toggle('desktopAlerts')}  label="Desktop notifications" />
+          <CheckItem checked={s.toggles.mentionAlerts}  onChange={() => toggle('mentionAlerts')}  label="Mention alerts" />
+          <CheckItem checked={s.toggles.soundCues}      onChange={() => toggle('soundCues')}      label="Sound cues" />
+        </div>
+      </Section>
+    </div>
+  );
+}
+
+function SessionsPanel({ s, toggle }: { s: SettingsState; toggle: any }) {
+  return (
+    <div className="space-y-5">
+      <Section title="History">
+        <div className="space-y-4">
+          <CheckItem checked={s.toggles.persistDrafts} onChange={() => toggle('persistDrafts')} label="Persist draft messages" />
+          <CheckItem checked={s.toggles.localHistory}  onChange={() => toggle('localHistory')}  label="Store local history" />
+        </div>
+      </Section>
+    </div>
+  );
+}
+
+function PlaceholderPanel({ label }: { label: string }) {
+  return (
+    <div className="flex h-full items-center justify-center">
+      <p className="text-[13px] text-white/15">{label} settings</p>
+    </div>
+  );
+}
+
+// ─── Root ─────────────────────────────────────────────────────────────────────
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
-  const reduceMotion = useReducedMotion();
+  const prefersReduced = useReducedMotion();
+  const [active, setActive] = useState<SectionKey>('appearance');
+  const [s, setS] = useState<SettingsState>(createDefault);
 
-  const [active, setActive] = useState<SectionKey>('workspace');
-  const [settings, setSettings] = useState<SettingsState>(() => createDefaultSettings());
+  const update = <K extends keyof SettingsState>(key: K, val: SettingsState[K]) =>
+    setS(prev => ({ ...prev, [key]: val }));
 
-  const activeNav = NAV.find((item) => item.key === active)!;
-  const toggles = settings.toggles;
+  const toggle = (key: ToggleKey) =>
+    setS(prev => ({ ...prev, toggles: { ...prev.toggles, [key]: !prev.toggles[key] } }));
 
-  const update = <K extends keyof SettingsState>(key: K, value: SettingsState[K]) => {
-    setSettings((prev) => ({ ...prev, [key]: value }));
-  };
-
-  const toggle = (key: ToggleKey) => {
-    setSettings((prev) => ({
-      ...prev,
-      toggles: {
-        ...prev.toggles,
-        [key]: !prev.toggles[key],
-      },
-    }));
-  };
-
-  const resetAll = () => {
-    setSettings(createDefaultSettings());
-    setActive('workspace');
+  const cyclePermission = (key: string) => {
+    const order: PermissionState[] = ['deny', 'ask', 'allow'];
+    setS(prev => {
+      const cur = prev.permissions[key] ?? 'deny';
+      const next = order[(order.indexOf(cur) + 1) % order.length];
+      return { ...prev, permissions: { ...prev.permissions, [key]: next } };
+    });
   };
 
   useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-
-    const previousOverflow = document.body.style.overflow;
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-
-    window.addEventListener('keydown', onKeyDown);
-
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener('keydown', onKeyDown);
-    };
+    window.addEventListener('keydown', handler);
+    return () => { document.body.style.overflow = prev; window.removeEventListener('keydown', handler); };
   }, [onClose]);
+
+  const isAgents = active === 'agents';
 
   const panel = (() => {
     switch (active) {
-      case 'workspace':
-        return (
-          <div className="space-y-6">
-            <PanelSection title="Session">
-              <Surface className="divide-y divide-white/[0.06] px-4">
-                <SettingRow
-                  title="Open on startup"
-                  description="Choose what happens when the app launches."
-                >
-                  <SegmentedControl
-                    id="startup"
-                    value={settings.startupMode}
-                    onChange={(v) => update('startupMode', v)}
-                    options={[
-                      { label: 'Resume', value: 'resume' },
-                      { label: 'Fresh', value: 'fresh' },
-                      { label: 'Ask', value: 'ask' },
-                    ]}
-                  />
-                </SettingRow>
-
-                <SettingRow
-                  title="Home view"
-                  description="What you see first after startup."
-                >
-                  <SegmentedControl
-                    id="landing"
-                    value={settings.landingView}
-                    onChange={(v) => update('landingView', v)}
-                    options={[
-                      { label: 'Canvas', value: 'canvas' },
-                      { label: 'Recent', value: 'recent' },
-                      { label: 'Projects', value: 'projects' },
-                    ]}
-                  />
-                </SettingRow>
-
-                <SettingRow
-                  title="Auto-name conversations"
-                  description="Create a title from the first message."
-                >
-                  <Switch checked={toggles.autoTitle} onChange={() => toggle('autoTitle')} />
-                </SettingRow>
-
-                <SettingRow
-                  title="Restore drafts"
-                  description="Keep unsent text between sessions."
-                >
-                  <Switch checked={toggles.restoreDrafts} onChange={() => toggle('restoreDrafts')} />
-                </SettingRow>
-              </Surface>
-            </PanelSection>
-
-            <PanelSection title="Composer">
-              <Surface className="divide-y divide-white/[0.06] px-4">
-                <SettingRow title="Input width">
-                  <SegmentedControl
-                    id="input-width"
-                    value={settings.inputWidth}
-                    onChange={(v) => update('inputWidth', v)}
-                    options={[
-                      { label: 'Centered', value: 'centered' },
-                      { label: 'Wide', value: 'wide' },
-                      { label: 'Floating', value: 'floating' },
-                    ]}
-                  />
-                </SettingRow>
-
-                <SettingRow
-                  title="Context depth"
-                  description="How many recent turns stay in focus."
-                >
-                  <Stepper
-                    value={settings.contextDepth}
-                    onChange={(v) => update('contextDepth', v)}
-                    min={2}
-                    max={16}
-                    suffix=" turns"
-                  />
-                </SettingRow>
-
-                <SettingRow
-                  title="Reply length"
-                  description="Soft preference from concise to detailed."
-                >
-                  <Stepper
-                    value={settings.replyLength}
-                    onChange={(v) => update('replyLength', v)}
-                    min={1}
-                    max={5}
-                    suffix="/5"
-                  />
-                </SettingRow>
-              </Surface>
-            </PanelSection>
-
-            <PanelSection title="Recent projects">
-              <div className="grid gap-2 sm:grid-cols-3">
-                {RECENT_PROJECTS.map((project) => (
-                  <div
-                    key={project.name}
-                    className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3.5"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/[0.05]">
-                        <IconLogo className="h-3.5 w-3.5 text-neutral-400" />
-                      </div>
-
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium text-neutral-200">
-                          {project.name}
-                        </div>
-                        <div className="truncate text-xs text-neutral-500">
-                          {project.sub}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 text-[11px] text-neutral-600">
-                      {project.updated}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </PanelSection>
-          </div>
-        );
-
-      case 'appearance':
-        return (
-          <div className="space-y-6">
-            <PanelSection title="Theme">
-              <Surface className="divide-y divide-white/[0.06] px-4">
-                <SettingRow title="Color mode">
-                  <SegmentedControl
-                    id="theme"
-                    value={settings.themeMode}
-                    onChange={(v) => update('themeMode', v)}
-                    options={[
-                      { label: 'System', value: 'system' },
-                      { label: 'Midnight', value: 'midnight' },
-                      { label: 'Ink+', value: 'ink' },
-                    ]}
-                  />
-                </SettingRow>
-
-                <SettingRow title="Density">
-                  <SegmentedControl
-                    id="density"
-                    value={settings.density}
-                    onChange={(v) => update('density', v)}
-                    options={[
-                      { label: 'Compact', value: 'compact' },
-                      { label: 'Default', value: 'comfortable' },
-                      { label: 'Airy', value: 'airy' },
-                    ]}
-                  />
-                </SettingRow>
-
-                <SettingRow title="Corner radius">
-                  <Stepper
-                    value={settings.cornerRadius}
-                    onChange={(v) => update('cornerRadius', v)}
-                    min={8}
-                    max={24}
-                    suffix=" px"
-                  />
-                </SettingRow>
-              </Surface>
-            </PanelSection>
-
-            <PanelSection title="Surface">
-              <Surface className="divide-y divide-white/[0.06] px-4">
-                <SettingRow
-                  title="Subtle motion"
-                  description="Keep transitions and hover feedback restrained."
-                >
-                  <Switch checked={toggles.subtleMotion} onChange={() => toggle('subtleMotion')} />
-                </SettingRow>
-
-                <SettingRow
-                  title="Dotted canvas"
-                  description="Show a faint grid on the home surface."
-                >
-                  <Switch checked={toggles.dottedCanvas} onChange={() => toggle('dottedCanvas')} />
-                </SettingRow>
-
-                <SettingRow
-                  title="Sidebar badges"
-                  description="Show compact metadata in navigation."
-                >
-                  <Switch checked={toggles.sidebarBadges} onChange={() => toggle('sidebarBadges')} />
-                </SettingRow>
-
-                <SettingRow
-                  title="Quiet labels"
-                  description="Lower contrast on secondary text."
-                >
-                  <Switch checked={toggles.quietLabels} onChange={() => toggle('quietLabels')} />
-                </SettingRow>
-              </Surface>
-            </PanelSection>
-
-            <PanelSection title="Preview">
-              <Surface
-                className="overflow-hidden bg-[#0a0b0d]"
-                style={{ borderRadius: settings.cornerRadius + 4 } as React.CSSProperties}
-              >
-                <div className="relative aspect-[16/9] p-3 sm:p-4">
-                  {toggles.dottedCanvas && (
-                    <div
-                      className="pointer-events-none absolute inset-0 opacity-[0.06]"
-                      style={{
-                        backgroundImage:
-                          'radial-gradient(circle, rgba(255,255,255,0.8) 1px, transparent 1px)',
-                        backgroundSize: '24px 24px',
-                      }}
-                    />
-                  )}
-
-                  <div className="relative h-full">
-                    <div className="h-9 rounded-xl border border-white/[0.06] bg-white/[0.03]" />
-
-                    <div className="mt-3 grid h-[calc(100%-48px)] grid-cols-[150px_1fr] gap-3">
-                      <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] p-3">
-                        <div className="mb-3 h-4 rounded bg-white/[0.07]" />
-                        <div className="space-y-2">
-                          <div className="h-7 rounded-lg bg-white/[0.06]" />
-                          <div className="h-7 rounded-lg bg-white/[0.04]" />
-                          <div className="h-7 rounded-lg bg-white/[0.04]" />
-                        </div>
-                      </div>
-
-                      <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
-                        <div className="mb-3 h-4 w-32 rounded bg-white/[0.07]" />
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="h-16 rounded-xl bg-white/[0.05]" />
-                          <div className="h-16 rounded-xl bg-white/[0.04]" />
-                        </div>
-                        <div className="mt-2 h-16 rounded-xl bg-white/[0.04]" />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </Surface>
-            </PanelSection>
-          </div>
-        );
-
-      case 'models':
-        return (
-          <div className="space-y-6">
-            <PanelSection title="Default model">
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {MODEL_OPTIONS.map((model) => {
-                  const selected = settings.defaultModel === model.id;
-
-                  return (
-                    <button
-                      key={model.id}
-                      type="button"
-                      onClick={() => update('defaultModel', model.id)}
-                      className={cx(
-                        'rounded-2xl border p-3.5 text-left transition-colors',
-                        selected
-                          ? 'border-white/[0.14] bg-white/[0.06]'
-                          : 'border-white/[0.08] bg-white/[0.03] hover:border-white/[0.12] hover:bg-white/[0.04]'
-                      )}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium text-neutral-100">
-                            {model.name}
-                          </div>
-                          <div className="mt-1 text-[11px] text-neutral-500">
-                            {model.provider}
-                          </div>
-                          <div className="mt-2 text-xs leading-5 text-neutral-500">
-                            {model.note}
-                          </div>
-                        </div>
-
-                        <div
-                          className={cx(
-                            'mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border',
-                            selected
-                              ? 'border-white/[0.18] bg-white text-black'
-                              : 'border-white/[0.08]'
-                          )}
-                        >
-                          {selected && <IconCheck className="h-3 w-3" />}
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </PanelSection>
-
-            <PanelSection title="Routing">
-              <Surface className="divide-y divide-white/[0.06] px-4">
-                <SettingRow title="Reasoning profile">
-                  <SegmentedControl
-                    id="reasoning"
-                    value={settings.reasoningProfile}
-                    onChange={(v) => update('reasoningProfile', v)}
-                    options={[
-                      { label: 'Fast', value: 'fast' },
-                      { label: 'Balanced', value: 'balanced' },
-                      { label: 'Deep', value: 'deep' },
-                    ]}
-                  />
-                </SettingRow>
-
-                <SettingRow
-                  title="Tool budget"
-                  description="Maximum number of tool steps before settling."
-                >
-                  <Stepper
-                    value={settings.toolBudget}
-                    onChange={(v) => update('toolBudget', v)}
-                    min={1}
-                    max={12}
-                    suffix=" steps"
-                  />
-                </SettingRow>
-
-                <SettingRow title="Context window">
-                  <Stepper
-                    value={settings.contextWindow}
-                    onChange={(v) => update('contextWindow', v)}
-                    min={32}
-                    max={256}
-                    step={8}
-                    suffix="k"
-                  />
-                </SettingRow>
-
-                <SettingRow
-                  title="Smart routing"
-                  description="Choose a better-fit model for the task."
-                >
-                  <Switch checked={toggles.smartRouting} onChange={() => toggle('smartRouting')} />
-                </SettingRow>
-
-                <SettingRow
-                  title="Multimodal uploads"
-                  description="Allow image handoff on supported models."
-                >
-                  <Switch
-                    checked={toggles.multimodalUploads}
-                    onChange={() => toggle('multimodalUploads')}
-                  />
-                </SettingRow>
-              </Surface>
-            </PanelSection>
-          </div>
-        );
-
-      case 'shortcuts':
-        return (
-          <div className="space-y-6">
-            <PanelSection title="Bindings">
-              <Surface className="divide-y divide-white/[0.06] px-4">
-                {SHORTCUTS_LIST.map((item) => (
-                  <div
-                    key={item.label}
-                    className="flex items-center justify-between gap-4 py-3.5"
-                  >
-                    <span className="text-sm text-neutral-300">{item.label}</span>
-
-                    <div className="flex gap-1">
-                      {item.keys.map((key) => (
-                        <Kbd key={key}>{key}</Kbd>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </Surface>
-            </PanelSection>
-
-            <PanelSection title="Command bar">
-              <Surface className="divide-y divide-white/[0.06] px-4">
-                <SettingRow
-                  title="Slash opens command bar"
-                  description="Route / in the composer to quick actions."
-                >
-                  <Switch
-                    checked={toggles.slashCommandBar}
-                    onChange={() => toggle('slashCommandBar')}
-                  />
-                </SettingRow>
-
-                <SettingRow
-                  title="Fuzzy search"
-                  description="Looser matching in palette results."
-                >
-                  <Switch checked={toggles.fuzzySearch} onChange={() => toggle('fuzzySearch')} />
-                </SettingRow>
-              </Surface>
-            </PanelSection>
-          </div>
-        );
-
-      case 'notifications':
-        return (
-          <div className="space-y-6">
-            <PanelSection title="Alerts">
-              <Surface className="divide-y divide-white/[0.06] px-4">
-                <SettingRow
-                  title="Desktop notifications"
-                  description="System alerts for replies and tasks."
-                >
-                  <Switch
-                    checked={toggles.desktopAlerts}
-                    onChange={() => toggle('desktopAlerts')}
-                  />
-                </SettingRow>
-
-                <SettingRow
-                  title="Mentions"
-                  description="Notify when something needs your attention."
-                >
-                  <Switch
-                    checked={toggles.mentionAlerts}
-                    onChange={() => toggle('mentionAlerts')}
-                  />
-                </SettingRow>
-
-                <SettingRow
-                  title="Sound cues"
-                  description="Play subtle sounds for send and completion."
-                >
-                  <Switch checked={toggles.soundCues} onChange={() => toggle('soundCues')} />
-                </SettingRow>
-              </Surface>
-            </PanelSection>
-
-            <PanelSection title="Digest">
-              <Surface className="px-4">
-                <SettingRow
-                  title="Digest cadence"
-                  description="Summary emails for recent activity."
-                >
-                  <SegmentedControl
-                    id="digest"
-                    value={settings.digestMode}
-                    onChange={(v) => update('digestMode', v)}
-                    options={[
-                      { label: 'Off', value: 'off' },
-                      { label: 'Weekly', value: 'weekly' },
-                      { label: 'Daily', value: 'daily' },
-                    ]}
-                  />
-                </SettingRow>
-              </Surface>
-            </PanelSection>
-          </div>
-        );
-
-      case 'privacy':
-        return (
-          <div className="space-y-6">
-            <PanelSection title="Data">
-              <Surface className="divide-y divide-white/[0.06] px-4">
-                <SettingRow
-                  title="Usage telemetry"
-                  description="Light product signals without prompt content."
-                >
-                  <Switch
-                    checked={toggles.usageTelemetry}
-                    onChange={() => toggle('usageTelemetry')}
-                  />
-                </SettingRow>
-
-                <SettingRow
-                  title="Local history"
-                  description="Store recent sessions on this device."
-                >
-                  <Switch checked={toggles.localHistory} onChange={() => toggle('localHistory')} />
-                </SettingRow>
-
-                <SettingRow
-                  title="Redacted analytics"
-                  description="Strip identifiers from event metadata."
-                >
-                  <Switch
-                    checked={toggles.redactedAnalytics}
-                    onChange={() => toggle('redactedAnalytics')}
-                  />
-                </SettingRow>
-              </Surface>
-            </PanelSection>
-
-            <PanelSection title="Storage">
-              <div className="grid gap-2 sm:grid-cols-3">
-                {[
-                  ['Cache', '18 MB'],
-                  ['Sessions', '24'],
-                  ['Workspaces', '3'],
-                ].map(([label, value]) => (
-                  <Surface key={label} className="p-3.5">
-                    <div className="text-xs text-neutral-500">{label}</div>
-                    <div className="mt-1 text-sm font-medium text-neutral-200">{value}</div>
-                  </Surface>
-                ))}
-              </div>
-            </PanelSection>
-
-            <PanelSection title="Actions">
-              <div className="grid gap-1.5">
-                {[
-                  'Export settings JSON',
-                  'Clear local cache',
-                  'Reset privacy defaults',
-                ].map((label) => (
-                  <button
-                    key={label}
-                    type="button"
-                    className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-3 text-left text-sm text-neutral-400 transition-colors hover:border-white/[0.12] hover:text-neutral-200"
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </PanelSection>
-          </div>
-        );
-
-      case 'labs':
-        return (
-          <div className="space-y-6">
-            <PanelSection title="Flags">
-              <Surface className="divide-y divide-white/[0.06] px-4">
-                {LAB_FLAGS.map((item) => (
-                  <SettingRow
-                    key={item.key}
-                    title={item.label}
-                    description={item.desc}
-                  >
-                    <div className="flex items-center gap-3">
-                      <Tag>{item.badge}</Tag>
-                      <Switch checked={toggles[item.key]} onChange={() => toggle(item.key)} />
-                    </div>
-                  </SettingRow>
-                ))}
-              </Surface>
-            </PanelSection>
-
-            <Surface className="px-4 py-4">
-              <div className="flex items-start gap-3">
-                <IconLabs className="mt-0.5 h-4 w-4 shrink-0 text-neutral-600" />
-                <p className="text-xs leading-5 text-neutral-500">
-                  Experimental features may change or disappear between releases.
-                </p>
-              </div>
-            </Surface>
-          </div>
-        );
+      case 'appearance':     return <AppearancePanel s={s} update={update} toggle={toggle} />;
+      case 'chat':           return <ChatPanel s={s} update={update} toggle={toggle} />;
+      case 'agents':         return <AgentsPanel s={s} update={update} cyclePermission={cyclePermission} />;
+      case 'notifications':  return <NotificationsPanel s={s} toggle={toggle} />;
+      case 'sessions':       return <SessionsPanel s={s} toggle={toggle} />;
+      default:               return <PlaceholderPanel label={NAV.find(n => n.key === active)?.label ?? active} />;
     }
   })();
 
@@ -1040,139 +661,91 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      transition={{ duration: 0.14 }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 px-4 py-6 backdrop-blur-md"
+      transition={{ duration: 0.18 }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-6 backdrop-blur-[3px]"
       onClick={onClose}
     >
       <motion.div
         role="dialog"
         aria-modal="true"
-        aria-labelledby="settings-title"
-        initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.985, y: 12 }}
-        animate={reduceMotion ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
-        exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.985, y: 12 }}
-        transition={
-          reduceMotion
-            ? { duration: 0.12 }
-            : { type: 'spring', stiffness: 280, damping: 28, mass: 0.9 }
-        }
-        onClick={(e) => e.stopPropagation()}
-        className="relative flex h-[min(84vh,760px)] w-full max-w-[1040px] overflow-hidden rounded-[22px] border border-white/[0.08] bg-[#0b0c0f] shadow-[0_36px_120px_rgba(0,0,0,0.58)]"
+        initial={prefersReduced ? { opacity: 0 } : { opacity: 0, scale: 0.975, y: 12 }}
+        animate={prefersReduced ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
+        exit={prefersReduced ? { opacity: 0 } : { opacity: 0, scale: 0.975, y: 8 }}
+        transition={prefersReduced ? { duration: 0.14 } : { type: 'spring', stiffness: 340, damping: 28, mass: 0.85 }}
+        onClick={e => e.stopPropagation()}
+        className="flex h-[min(92vh,840px)] w-full max-w-[1060px] overflow-hidden rounded-[13px] border border-white/[0.07] bg-[#0f0f0f] shadow-[0_40px_100px_rgba(0,0,0,0.9)]"
       >
-        <aside className="flex w-[208px] shrink-0 flex-col border-r border-white/[0.06] bg-white/[0.01]">
-          <div className="flex items-center gap-2.5 px-4 py-5">
-            <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-white/[0.07]">
-              <IconLogo className="h-3.5 w-3.5 text-white/80" />
-            </div>
-            <span className="text-[13px] font-semibold text-white">Settings</span>
-          </div>
-
-          <nav className="flex-1 space-y-1 px-2.5 pb-4">
-            {NAV.map(({ key, label, icon: Icon }) => {
-              const isActive = key === active;
-
+        {/* ── Sidebar ─────────────────────────────────────── */}
+        <aside className="flex w-[210px] shrink-0 flex-col border-r border-white/[0.06] bg-[#0a0a0a]">
+          <div className="flex-1 overflow-y-auto py-2">
+            {NAV.map(({ key, label, icon, beta }) => {
+              const Icon = I[icon];
+              const isActive = active === key;
               return (
                 <button
                   key={key}
-                  type="button"
                   onClick={() => setActive(key)}
-                  className="group relative flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left"
+                  className={cx(
+                    'relative flex w-full items-center gap-3 px-4 py-[9px] text-left text-[13px] transition-colors duration-100',
+                    isActive ? 'text-white/90' : 'text-white/35 hover:text-white/65'
+                  )}
                 >
                   {isActive && (
                     <motion.div
-                      layoutId="nav-pill"
-                      transition={{ type: 'spring', stiffness: 420, damping: 34 }}
-                      className="absolute inset-0 rounded-xl border border-white/[0.08] bg-white/[0.06]"
+                      layoutId="sidebar-pill"
+                      className="absolute inset-x-2 inset-y-0.5 rounded-[6px] bg-white/[0.07]"
+                      transition={{ type: 'spring', stiffness: 380, damping: 30 }}
                     />
                   )}
-
-                  <Icon
-                    className={cx(
-                      'relative h-4 w-4 shrink-0 transition-colors',
-                      isActive
-                        ? 'text-white'
-                        : 'text-neutral-600 group-hover:text-neutral-400'
-                    )}
-                  />
-
-                  <span
-                    className={cx(
-                      'relative text-sm transition-colors',
-                      isActive
-                        ? 'font-medium text-white'
-                        : 'text-neutral-500 group-hover:text-neutral-300'
-                    )}
-                  >
-                    {label}
-                  </span>
+                  <Icon className="relative z-10 h-[15px] w-[15px] shrink-0" />
+                  <span className="relative z-10 font-medium">{label}</span>
+                  {beta && (
+                    <span className="relative z-10 ml-auto rounded px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-amber-400/60">
+                      beta
+                    </span>
+                  )}
                 </button>
               );
             })}
-          </nav>
-
-          <div className="border-t border-white/[0.06] px-4 py-4 text-[11px] text-neutral-600">
-            v0.1.50
           </div>
+
+          <Rule />
+          <button className="flex items-center gap-2.5 px-4 py-3.5 text-[12px] text-white/20 transition-colors hover:text-white/50">
+            <I.RotateCcw className="h-3.5 w-3.5" />
+            Reload OpenCode
+          </button>
         </aside>
 
-        <div className="flex min-w-0 flex-1 flex-col">
-          <header className="flex items-start justify-between border-b border-white/[0.06] px-5 py-4 sm:px-6">
-            <div>
-              <h2 id="settings-title" className="text-sm font-semibold text-white">
-                {activeNav.label}
-              </h2>
-              <p className="mt-1 text-xs text-neutral-600">{activeNav.description}</p>
-            </div>
-
+        {/* ── Content ─────────────────────────────────────── */}
+        <div className="flex min-w-0 flex-1 flex-col bg-[#0f0f0f]">
+          {/* Topbar */}
+          <div className="flex shrink-0 items-center justify-between border-b border-white/[0.05] px-7 py-[13px]">
+            <span className="text-[13px] font-semibold text-white/60">
+              {NAV.find(n => n.key === active)?.label}
+            </span>
             <button
-              type="button"
-              aria-label="Close settings"
               onClick={onClose}
-              className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-neutral-500 transition-colors hover:text-white"
+              className="flex h-7 w-7 items-center justify-center rounded-[5px] text-white/25 transition-colors hover:bg-white/[0.06] hover:text-white/70"
             >
-              <IconClose className="h-3.5 w-3.5" />
+              <I.X className="h-4 w-4" />
             </button>
-          </header>
-
-          <div className="flex-1 overflow-y-auto">
-            <div className="mx-auto w-full max-w-2xl px-5 py-5 sm:px-6">
-              <AnimatePresence mode="wait" initial={false}>
-                <motion.div
-                  key={active}
-                  initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 6 }}
-                  animate={reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
-                  exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4 }}
-                  transition={{ duration: 0.14 }}
-                >
-                  {panel}
-                </motion.div>
-              </AnimatePresence>
-            </div>
           </div>
 
-          <footer className="flex items-center justify-between border-t border-white/[0.06] px-5 py-3 sm:px-6">
-            <p className="hidden text-xs text-neutral-600 sm:block">
-              Changes are applied automatically.
-            </p>
-
-            <div className="ml-auto flex items-center gap-2">
-              <button
-                type="button"
-                onClick={resetAll}
-                className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-2 text-xs text-neutral-400 transition-colors hover:text-white"
+          {/* Panel */}
+          <div className={cx('min-h-0 flex-1', isAgents ? 'overflow-hidden' : 'overflow-y-auto')}>
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={active}
+                initial={prefersReduced ? { opacity: 0 } : { opacity: 0, y: 6 }}
+                animate={prefersReduced ? { opacity: 1 } : { opacity: 1, y: 0 }}
+                exit={prefersReduced ? { opacity: 0 } : { opacity: 0, y: -4 }}
+                transition={{ duration: 0.14, ease: 'easeOut' }}
+                className={cx('h-full', !isAgents && 'px-8 py-8')}
               >
-                Reset defaults
-              </button>
-
-              <button
-                type="button"
-                onClick={onClose}
-                className="rounded-xl border border-white/[0.1] bg-white/[0.08] px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-white/[0.11]"
-              >
-                Done
-              </button>
-            </div>
-          </footer>
+                {panel}
+              </motion.div>
+            </AnimatePresence>
+          </div>
         </div>
       </motion.div>
     </motion.div>
