@@ -11,7 +11,7 @@ import {
   Loader2,
   FileEdit,
 } from 'lucide-react';
-import { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { Message } from '../hooks/useChat';
 import { getGitDiff } from '../lib/tauri';
@@ -22,7 +22,8 @@ interface Props {
   message: Message;
 }
 
-const markdownComponents: Components = {
+// Memoize markdownComponents to prevent recreation on every render
+const useMarkdownComponents = () => useMemo<Components>(() => ({
   p({ children }) {
     return <p className="mb-4 last:mb-0">{children}</p>;
   },
@@ -132,7 +133,7 @@ const markdownComponents: Components = {
       </td>
     );
   },
-};
+}), []);
 
 // ── Shimmer text for thinking state ──
 
@@ -535,7 +536,7 @@ function ExploredFiles({ count }: { count: number }) {
 
 // ── Main Component ──
 
-export function ChatMessages({ message }: Props) {
+export const ChatMessages = React.memo(function ChatMessages({ message }: Props) {
   const isUser = message.role === 'user';
 
   // ── User Message ──
@@ -557,20 +558,29 @@ export function ChatMessages({ message }: Props) {
   }
 
   // ── Assistant Message ──
-  const hasToolActivity =
-    (message.toolCalls?.length ?? 0) > 0 ||
-    (message.toolResults?.length ?? 0) > 0 ||
-    (message.fileEdits?.length ?? 0) > 0;
+  const markdownComponents = useMarkdownComponents();
+  
+  const hasToolActivity = useMemo(
+    () =>
+      (message.toolCalls?.length ?? 0) > 0 ||
+      (message.toolResults?.length ?? 0) > 0 ||
+      (message.fileEdits?.length ?? 0) > 0,
+    [message.toolCalls, message.toolResults, message.fileEdits]
+  );
 
-  const readCount = (message.toolCalls || []).filter((tc) => {
-    const n = tc.name.toLowerCase();
-    return (
-      n.includes('read') ||
-      n.includes('explore') ||
-      n.includes('file') ||
-      n.includes('get')
-    );
-  }).length;
+  const readCount = useMemo(
+    () =>
+      (message.toolCalls || []).filter((tc) => {
+        const n = tc.name.toLowerCase();
+        return (
+          n.includes('read') ||
+          n.includes('explore') ||
+          n.includes('file') ||
+          n.includes('get')
+        );
+      }).length,
+    [message.toolCalls]
+  );
 
   return (
     <motion.div
@@ -634,7 +644,7 @@ export function ChatMessages({ message }: Props) {
       )}
     </motion.div>
   );
-}
+});
 
 // ── Lightweight placeholder for off-screen messages (culling) ──
 

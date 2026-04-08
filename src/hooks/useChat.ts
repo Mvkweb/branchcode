@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { Channel } from '@tauri-apps/api/core';
 import {
   sendMessage as tauriSendMessage,
@@ -262,6 +262,49 @@ export function useChat() {
     cost: 0,
   });
 
+  // RAF batching for smooth streaming updates
+  const rafIdRef = useRef<number | null>(null);
+  const pendingUpdateRef = useRef<(() => void) | null>(null);
+  const assistantIdRef = useRef<string | null>(null);
+
+  const flushUpdate = useCallback(() => {
+    if (pendingUpdateRef.current) {
+      pendingUpdateRef.current();
+      pendingUpdateRef.current = null;
+    }
+    rafIdRef.current = null;
+  }, []);
+
+  const scheduleUpdate = useCallback((updater: () => void) => {
+    pendingUpdateRef.current = updater;
+    if (rafIdRef.current === null) {
+      rafIdRef.current = requestAnimationFrame(flushUpdate);
+    }
+  }, [flushUpdate]);
+
+  // Clean up RAF on unmount
+  useEffect(() => {
+    return () => {
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+      }
+    };
+  }, []);
+
+  const clearStreamingRefs = useCallback(() => {
+    streamContentRef.current = '';
+    reasoningRef.current = '';
+    toolCallsRef.current = [];
+    toolResultsRef.current = [];
+    fileEditsRef.current = [];
+    assistantIdRef.current = null;
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+      pendingUpdateRef.current = null;
+    }
+  }, []);
+
   const loadMessages = useCallback(async (sessionId: string) => {
     const requestId = ++loadRequestRef.current;
     setIsLoading(true);
@@ -277,7 +320,10 @@ export function useChat() {
       }
 
       if (requestId !== loadRequestRef.current) return;
-      if (streamingSessionRef.current === sessionId) return;
+      if (streamingSessionRef.current === sessionId) {
+        clearStreamingRefs();
+        return;
+      }
 
       // Fast path: map only the last PAGE_SIZE messages
       const totalLen = ocMessages.length;
@@ -295,7 +341,7 @@ export function useChat() {
       console.error('Failed to load messages:', err);
       setIsLoading(false);
     }
-  }, []);
+  }, [clearStreamingRefs]);
 
   const send = useCallback(
     async (sessionId: string, content: string, agent?: string) => {
@@ -327,11 +373,14 @@ export function useChat() {
       fileEditsRef.current = [];
 
       const assistantId = assistantMsg.id;
+      assistantIdRef.current = assistantId;
 
       const updateAssistant = (updater: (msg: Message) => Message) => {
-        setMessages((prev) =>
-          prev.map((msg) => (msg.id === assistantId ? updater(msg) : msg))
-        );
+        scheduleUpdate(() => {
+          setMessages((prev) =>
+            prev.map((msg) => (msg.id === assistantId ? updater(msg) : msg))
+          );
+        });
       };
 
       const channel = new Channel<StreamEvent>();
@@ -422,6 +471,16 @@ export function useChat() {
             break;
 
           case 'done':
+            // Flush any pending RAF updates before finalizing
+            if (rafIdRef.current !== null) {
+              cancelAnimationFrame(rafIdRef.current);
+              if (pendingUpdateRef.current) {
+                pendingUpdateRef.current();
+                pendingUpdateRef.current = null;
+              }
+              rafIdRef.current = null;
+            }
+
             setIsStreaming(false);
             setStatus(null);
             loadingRef.current = false;
@@ -430,29 +489,31 @@ export function useChat() {
             const doneTokens = event.data.tokens ? extractTokens(event.data.tokens) : undefined;
             const doneCost = event.data.cost;
 
-            updateAssistant((msg) =>
-              msg.streaming
-                ? {
-                    ...msg,
-                    content: streamContentRef.current || event.data.full_text || '',
-                    streaming: false,
-                    reasoning: reasoningRef.current || undefined,
-                    toolCalls:
-                      toolCallsRef.current.length > 0
-                        ? [...toolCallsRef.current]
-                        : undefined,
-                    toolResults:
-                      toolResultsRef.current.length > 0
-                        ? [...toolResultsRef.current]
-                        : undefined,
-                    fileEdits:
-                      fileEditsRef.current.length > 0
-                        ? [...fileEditsRef.current]
-                        : undefined,
-                    tokens: doneTokens || msg.tokens,
-                    cost: doneCost ?? msg.cost,
-                  }
-                : msg
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === assistantIdRef.current && msg.streaming
+                  ? {
+                      ...msg,
+                      content: streamContentRef.current || event.data.full_text || '',
+                      streaming: false,
+                      reasoning: reasoningRef.current || undefined,
+                      toolCalls:
+                        toolCallsRef.current.length > 0
+                          ? [...toolCallsRef.current]
+                          : undefined,
+                      toolResults:
+                        toolResultsRef.current.length > 0
+                          ? [...toolResultsRef.current]
+                          : undefined,
+                      fileEdits:
+                        fileEditsRef.current.length > 0
+                          ? [...fileEditsRef.current]
+                          : undefined,
+                      tokens: doneTokens || msg.tokens,
+                      cost: doneCost ?? msg.cost,
+                    }
+                  : msg
+              )
             );
             
             // Skip reconciliation - streaming already has correct toolCalls/fileEdits, 
@@ -497,14 +558,26 @@ export function useChat() {
       try {
         await tauriSendMessage(sessionId, content.trim(), channel, agent);
       } catch (err: any) {
+        // Flush pending updates before error
+        if (rafIdRef.current !== null) {
+          cancelAnimationFrame(rafIdRef.current);
+          if (pendingUpdateRef.current) {
+            pendingUpdateRef.current();
+            pendingUpdateRef.current = null;
+          }
+          rafIdRef.current = null;
+        }
+
         setIsStreaming(false);
         loadingRef.current = false;
         streamingSessionRef.current = null;
 
-        updateAssistant((msg) =>
-          msg.streaming
-            ? { ...msg, content: `${err?.toString() || 'Unknown error'}`, streaming: false }
-            : msg
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantIdRef.current && msg.streaming
+              ? { ...msg, content: `${err?.toString() || 'Unknown error'}`, streaming: false }
+              : msg
+          )
         );
       }
     },
@@ -514,11 +587,12 @@ export function useChat() {
   const clearMessages = useCallback(() => {
     loadRequestRef.current += 1;
     streamingSessionRef.current = null;
+    clearStreamingRefs();
     setMessages([]);
     setIsStreaming(false);
     setIsLoading(false);
     setStatus(null);
-  }, []);
+  }, [clearStreamingRefs]);
 
   const getSessionUsage = useCallback((): SessionUsage => {
     let inputTokens = 0;

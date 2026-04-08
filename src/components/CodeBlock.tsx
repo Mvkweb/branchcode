@@ -1,71 +1,166 @@
 import { useEffect, useState } from 'react';
 import { codeToHtml } from 'shiki';
 import { Check, Copy } from 'lucide-react';
-import * as si from 'simple-icons';
-import type { SimpleIcon } from 'simple-icons';
 
-// Hand-picked mapping of common extensions to brand configurations from simple-icons
-function getLanguageIcon(lang: string): SimpleIcon | undefined {
+function getLanguageIconClass(lang: string): { class: string; invert?: boolean; color?: string; isLarge?: boolean } | undefined {
   const norm = lang.toLowerCase();
-  switch (norm) {
-    case 'js':
-    case 'javascript': return si.siJavascript;
-    case 'ts':
-    case 'typescript': return si.siTypescript;
-    case 'python':
-    case 'py': return si.siPython;
-    case 'rust':
-    case 'rs': return si.siRust;
-    case 'go': return si.siGo;
-    case 'html': return si.siHtml5;
-    case 'css': return si.siCss;
-    case 'bash':
-    case 'sh':
-    case 'shell': return si.siGnubash;
-    case 'json': return si.siJson;
-    case 'yaml':
-    case 'yml': return si.siYaml;
-    case 'md':
-    case 'markdown': return si.siMarkdown;
-    case 'java': return undefined;
-    case 'kotlin':
-    case 'kt': return si.siKotlin;
-    case 'groovy': return si.siApachegroovy;
-    case 'elixir':
-    case 'ex':
-    case 'exs': return si.siElixir;
-    case 'react':
-    case 'jsx':
-    case 'tsx': return si.siReact;
-    case 'node': return si.siNodedotjs;
-    case 'c':
-    case 'c++':
-    case 'cpp': return si.siCplusplus;
-    case 'c#':
-    case 'csharp':
-    case 'cs': return undefined;
-    case 'ruby':
-    case 'rb': return si.siRuby;
-    case 'php': return si.siPhp;
-    case 'swift': return si.siSwift;
-    case 'dart': return si.siDart;
-    case 'docker':
-    case 'dockerfile': return si.siDocker;
-    case 'kube':
-    case 'kubernetes': return si.siKubernetes;
-    case 'sql': return si.siMysql;
-    case 'vue': return si.siVuedotjs;
-    case 'svelte': return si.siSvelte;
-    case 'angular': return si.siAngular;
-    case 'lua': return si.siLua;
-    case 'zig': return si.siZig;
-    case 'haskell': return si.siHaskell;
-    case 'scala': return si.siScala;
-    case 'xml': return si.siXml;
-    case 'toml': return si.siToml;
-    case 'git': return si.siGit;
-    default: return undefined;
-  }
+  
+  const icons: Record<string, { icon: string; invert?: boolean; color?: string; isLarge?: boolean }> = {
+    js: { icon: 'ci-javascript' },
+    javascript: { icon: 'ci-javascript' },
+    ts: { icon: 'ci-typescript' },
+    typescript: { icon: 'ci-typescript' },
+    jsx: { icon: 'ci-react' },
+    tsx: { icon: 'ci-react' },
+    py: { icon: 'ci-python' },
+    python: { icon: 'ci-python' },
+    rs: { icon: 'ci-rust', invert: true },
+    rust: { icon: 'ci-rust', invert: true },
+    go: { icon: 'ci-golang' },
+    golang: { icon: 'ci-golang' },
+    html: { icon: 'ci-html' },
+    css: { icon: 'ci-css' },
+    scss: { icon: 'ci-sass' },
+    sass: { icon: 'ci-sass' },
+    less: { icon: 'ci-less' },
+    sh: { icon: 'ci-bash' },
+    bash: { icon: 'ci-bash' },
+    shell: { icon: 'ci-bash' },
+    zsh: { icon: 'ci-ohmyzsh' },
+    fish: { icon: 'ci-fish' },
+    json: { icon: 'ci-json' },
+    yaml: { icon: 'ci-yaml' },
+    yml: { icon: 'ci-yaml' },
+    toml: { icon: 'ci-toml' },
+    xml: { icon: 'ci-xml' },
+    ini: { icon: 'ci-ini' },
+    env: { icon: 'ci-dotenv' },
+    md: { icon: 'ci-markdown' },
+    markdown: { icon: 'ci-markdown' },
+    txt: { icon: 'ci-text' },
+    java: { icon: 'ci-java' },
+    kotlin: { icon: 'ci-kotlin' },
+    kt: { icon: 'ci-kotlin' },
+    scala: { icon: 'ci-scala' },
+    groovy: { icon: 'ci-groovy', invert: true, isLarge: true },
+    clojure: { icon: 'ci-clojure' },
+    csharp: { icon: 'ci-csharp' },
+    'c#': { icon: 'ci-csharp' },
+    cs: { icon: 'ci-csharp' },
+    'f#': { icon: 'ci-fsharp' },
+    fs: { icon: 'ci-fsharp' },
+    vb: { icon: 'ci-vbdotnet' },
+    'vb.net': { icon: 'ci-vbdotnet' },
+    c: { icon: 'ci-c' },
+    'c++': { icon: 'ci-cplusplus' },
+    cpp: { icon: 'ci-cplusplus' },
+    objectivec: { icon: 'ci-objectivec' },
+    'obj-c': { icon: 'ci-objectivec' },
+    zig: { icon: 'ci-zig', color: '#f7a41d' },
+    nim: { icon: 'ci-nim' },
+    assembly: { icon: 'ci-assembly' },
+    haskell: { icon: 'ci-haskell' },
+    erlang: { icon: 'ci-erlang' },
+    elixir: { icon: 'ci-elixir' },
+    ex: { icon: 'ci-elixir' },
+    exs: { icon: 'ci-elixir' },
+    ocaml: { icon: 'ci-ocaml' },
+    fsharp: { icon: 'ci-fsharp' },
+    elm: { icon: 'ci-elm' },
+    lisp: { icon: 'ci-commonlisp' },
+    elisp: { icon: 'ci-commonlisp' },
+    scheme: { icon: 'ci-scheme' },
+    ruby: { icon: 'ci-ruby' },
+    rb: { icon: 'ci-ruby' },
+    php: { icon: 'ci-php' },
+    perl: { icon: 'ci-perl' },
+    lua: { icon: 'ci-lua' },
+    r: { icon: 'ci-r' },
+    swift: { icon: 'ci-swift' },
+    dart: { icon: 'ci-dart' },
+    react: { icon: 'ci-react' },
+    vue: { icon: 'ci-vuejs' },
+    svelte: { icon: 'ci-svelte' },
+    angular: { icon: 'ci-angular' },
+    nextjs: { icon: 'ci-nextjs' },
+    nuxt: { icon: 'ci-nuxtjs' },
+    express: { icon: 'ci-express' },
+    fastapi: { icon: 'ci-fastapi' },
+    django: { icon: 'ci-django' },
+    rails: { icon: 'ci-rubyonrails' },
+    laravel: { icon: 'ci-laravel' },
+    spring: { icon: 'ci-spring' },
+    flask: { icon: 'ci-flask' },
+    node: { icon: 'ci-nodejs' },
+    nodejs: { icon: 'ci-nodejs' },
+    npm: { icon: 'ci-npm' },
+    yarn: { icon: 'ci-yarn' },
+    pnpm: { icon: 'ci-pnpm' },
+    bun: { icon: 'ci-bun' },
+    sql: { icon: 'ci-mysql' },
+    mysql: { icon: 'ci-mysql' },
+    postgresql: { icon: 'ci-postgresql' },
+    postgres: { icon: 'ci-postgresql' },
+    mongodb: { icon: 'ci-mongodb' },
+    mongo: { icon: 'ci-mongodb' },
+    sqlite: { icon: 'ci-sqlite' },
+    redis: { icon: 'ci-redis' },
+    graphql: { icon: 'ci-graphql' },
+    docker: { icon: 'ci-docker' },
+    dockerfile: { icon: 'ci-docker' },
+    kubernetes: { icon: 'ci-kubernetes' },
+    kube: { icon: 'ci-kubernetes' },
+    k8s: { icon: 'ci-kubernetes' },
+    terraform: { icon: 'ci-terraform' },
+    ansible: { icon: 'ci-ansible' },
+    helm: { icon: 'ci-helm' },
+    jenkins: { icon: 'ci-jenkins' },
+    gitlab: { icon: 'ci-gitlab' },
+    github: { icon: 'ci-github' },
+    githubactions: { icon: 'ci-githubactions' },
+    git: { icon: 'ci-git' },
+    vscode: { icon: 'ci-vscode' },
+    intellij: { icon: 'ci-intellij' },
+    vim: { icon: 'ci-vim' },
+    neovim: { icon: 'ci-neovim' },
+    emacs: { icon: 'ci-emacs' },
+    sublime: { icon: 'ci-sublime' },
+    composer: { icon: 'ci-composer' },
+    pip: { icon: 'ci-pypi' },
+    pipenv: { icon: 'ci-pipenv' },
+    poetry: { icon: 'ci-poetry' },
+    cargo: { icon: 'ci-cargo' },
+    jest: { icon: 'ci-jest' },
+    mocha: { icon: 'ci-mocha' },
+    pytest: { icon: 'ci-pytest' },
+    junit: { icon: 'ci-junit' },
+    cypress: { icon: 'ci-cypress' },
+    playwright: { icon: 'ci-playwright' },
+    webpack: { icon: 'ci-webpack' },
+    vite: { icon: 'ci-vite' },
+    esbuild: { icon: 'ci-esbuild' },
+    rollup: { icon: 'ci-rollup' },
+    parcel: { icon: 'ci-parcel' },
+    cmake: { icon: 'ci-cmake' },
+    make: { icon: 'ci-make' },
+    gradle: { icon: 'ci-gradle' },
+    maven: { icon: 'ci-maven' },
+    latex: { icon: 'ci-latex' },
+    bibtex: { icon: 'ci-latex' },
+    powershell: { icon: 'ci-powershell' },
+    ps1: { icon: 'ci-powershell' },
+    wasm: { icon: 'ci-webassembly' },
+  };
+  
+  const result = icons[norm];
+  if (!result) return undefined;
+  
+  return {
+    class: result.icon,
+    invert: result.invert,
+    color: result.color,
+    isLarge: result.isLarge
+  };
 }
 
 // Our custom minimal branchcode theme mirroring the reference image
@@ -114,7 +209,7 @@ interface CodeBlockProps {
 export function CodeBlock({ code, language }: CodeBlockProps) {
   const [html, setHtml] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const icon = getLanguageIcon(language);
+  const iconClass = getLanguageIconClass(language);
 
   useEffect(() => {
     let valid = true;
@@ -148,19 +243,20 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
   return (
     <div className="my-5 relative group">
       {/* Icon + Language Name elegantly placed at top left */}
-      <div className="absolute top-3.5 left-5 flex items-center gap-2 select-none z-10 px-1 opacity-60">
-        {icon && (
-          <svg
-            role="img"
-            viewBox="0 0 24 24"
-            width="13"
-            height="13"
-            fill={`#${icon.hex}`}
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <title>{icon.title}</title>
-            <path d={icon.path} />
-          </svg>
+      <div className="absolute top-3.5 left-5 flex items-center gap-2 select-none z-10 px-1 opacity-80">
+        {iconClass && (
+          <span 
+            className={`${iconClass.class}${iconClass.invert ? ' ci-invert' : ''}`}
+            style={{ 
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: iconClass.isLarge ? '20px' : '16px',
+              height: iconClass.isLarge ? '20px' : '16px',
+              fontSize: iconClass.isLarge ? '18px' : '14px',
+              color: iconClass.color
+            }}
+          ></span>
         )}
         <span className="text-[11.5px] text-neutral-500 font-mono tracking-wide lowercase pt-[1px]">
           {language || 'text'}
