@@ -994,11 +994,11 @@ export default function App() {
             >
               <img
                 src="https://api.dicebear.com/7.x/avataaars/svg?seed=Paulius&backgroundColor=b6e3f4"
-                alt="Paulius"
+                alt="Mvk"
                 className="w-6 h-6 rounded-full bg-neutral-800"
               />
               <span className="text-sm font-medium text-neutral-300 group-hover:text-white transition-colors">
-                Paulius
+                Mvk
               </span>
             </div>
             <button className="text-neutral-500 hover:text-neutral-300 transition-colors">

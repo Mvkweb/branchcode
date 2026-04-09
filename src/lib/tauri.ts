@@ -228,3 +228,25 @@ export async function commit(message: string): Promise<void> {
 export async function getGitDiffStats(): Promise<GitFile[]> {
   return invoke('get_git_diff_stats');
 }
+
+// ── Terminal Commands ──
+
+export async function spawnTerminal(): Promise<string> {
+  return invoke('spawn_terminal');
+}
+
+export async function writeTerminal(id: string, data: string): Promise<void> {
+  return invoke('write_terminal', { id, data });
+}
+
+export async function readTerminal(id: string): Promise<string | null> {
+  return invoke('read_terminal', { id });
+}
+
+export async function resizeTerminal(id: string, cols: number, rows: number): Promise<void> {
+  return invoke('resize_terminal', { id, cols, rows });
+}
+
+export async function closeTerminal(id: string): Promise<void> {
+  return invoke('close_terminal', { id });
+}

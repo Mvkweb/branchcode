@@ -1,0 +1,25 @@
+/* Terminal container styling */
+.terminal-container canvas {
+  display: block;
+}
+
+/* Custom scrollbar for terminal */
+.terminal-container::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.terminal-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.terminal-container::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+.terminal-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* Remove xterm.js legacy styles - ghostty-web doesn't use them */
