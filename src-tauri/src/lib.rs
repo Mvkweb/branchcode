@@ -301,6 +301,12 @@ fn close_terminal(id: String, state: State<'_, PtyState>) -> Result<(), String> 
     pty_manager.close(&id).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn is_terminal_alive(id: String, state: State<'_, PtyState>) -> Result<bool, String> {
+    let mut pty_manager = state.lock().map_err(|e| e.to_string())?;
+    Ok(pty_manager.is_alive(&id))
+}
+
 // ── App setup ──
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -382,6 +388,7 @@ pub fn run() {
             read_terminal,
             resize_terminal,
             close_terminal,
+            is_terminal_alive,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

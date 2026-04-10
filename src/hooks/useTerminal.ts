@@ -6,36 +6,32 @@ export interface TerminalInstance {
   id: string;
   terminal: Terminal;
   container: HTMLDivElement;
+  fitAddon: any;
 }
 
 interface UseTerminalReturn {
   terminals: TerminalInstance[];
   activeTerminalId: string | null;
-  isInitialized: boolean;
   createTerminal: () => Promise<void>;
   closeTerminal: (id: string) => Promise<void>;
   setActiveTerminal: (id: string) => void;
+  onTerminalExit?: (id: string) => void;
 }
 
-export function useTerminal(): UseTerminalReturn {
+export function useTerminal(onTerminalExit?: (id: string) => void): UseTerminalReturn {
   const [terminals, setTerminals] = useState<TerminalInstance[]>([]);
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
-  const [isInitialized, setIsInitialized] = useState(false);
   const pollIntervalsRef = useRef<Map<string, number>>(new Map());
   const isInitializedRef = useRef(false);
   const terminalsRef = useRef<TerminalInstance[]>([]);
+  
+  // Store latest callback in ref to avoid stale closure
+  const onTerminalExitRef = useRef(onTerminalExit);
+  onTerminalExitRef.current = onTerminalExit;
 
   useEffect(() => {
     terminalsRef.current = terminals;
   }, [terminals]);
-
-  const initTerminal = useCallback(async () => {
-    if (isInitializedRef.current) return;
-    isInitializedRef.current = true;
-    await init();
-    setIsInitialized(true);
-    console.log('[Terminal] ghostty-web initialized with init()');
-  }, []);
 
   const pollRead = useCallback(async (terminalId: string) => {
     try {
@@ -47,7 +43,15 @@ export function useTerminal(): UseTerminalReturn {
         }
       }
     } catch (e) {
+      // Ignore errors - will check is_alive separately
     }
+  }, []);
+
+  const initTerminal = useCallback(async () => {
+    if (isInitializedRef.current) return;
+    isInitializedRef.current = true;
+    await init();
+    console.log('[Terminal] ghostty-web initialized');
   }, []);
 
   const createTerminal = useCallback(async () => {
@@ -98,8 +102,6 @@ export function useTerminal(): UseTerminalReturn {
         },
         cursorBlink: true,
         cursorStyle: 'bar',
-        fontWeight: '400',
-        lineHeight: 1.2,
       });
       console.log('[Terminal] Terminal instance created');
 
@@ -115,13 +117,43 @@ export function useTerminal(): UseTerminalReturn {
         id,
         terminal: term,
         container,
+        fitAddon,
       };
 
       setTerminals(prev => [...prev, newInstance]);
       setActiveTerminalId(id);
 
-      const intervalId = window.setInterval(() => {
+      const intervalId = window.setInterval(async () => {
         pollRead(id);
+        
+        // Check if terminal process is still alive
+        try {
+          const isAlive = await invoke<boolean>('is_terminal_alive', { id });
+          if (!isAlive) {
+            console.log('[Terminal] Process exited for', id);
+            // Clear the interval first
+            const intervalIdToClear = pollIntervalsRef.current.get(id);
+            if (intervalIdToClear) {
+              clearInterval(intervalIdToClear);
+              pollIntervalsRef.current.delete(id);
+            }
+            // Then call exit handler
+            if (onTerminalExitRef.current) {
+              onTerminalExitRef.current(id);
+            }
+          }
+        } catch (e) {
+          // If we can't check (process might be dead), trigger exit
+          console.log('[Terminal] is_terminal_alive error, assuming dead:', e);
+          const intervalIdToClear = pollIntervalsRef.current.get(id);
+          if (intervalIdToClear) {
+            clearInterval(intervalIdToClear);
+            pollIntervalsRef.current.delete(id);
+          }
+          if (onTerminalExitRef.current) {
+            onTerminalExitRef.current(id);
+          }
+        }
       }, 50);
       pollIntervalsRef.current.set(id, intervalId);
 
@@ -190,7 +222,6 @@ export function useTerminal(): UseTerminalReturn {
   return {
     terminals,
     activeTerminalId,
-    isInitialized,
     createTerminal,
     closeTerminal,
     setActiveTerminal,

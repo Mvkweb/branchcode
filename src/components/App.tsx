@@ -30,6 +30,7 @@ import { useGit } from '../hooks/useGit';
 import { SettingsModal } from './Settings';
 import { ChatMessages, MessagePlaceholder } from './ChatMessages';
 import { GitPanel } from './GitPanel';
+import { TerminalPanel } from './TerminalPanel';
 import { useVirtualMessages } from '../hooks/useVirtualScroll';
 import { getConfig, setModel, getModelInfo, getProviders, getAvailableModels, type ConfigInfo, type ProviderInfo } from '../lib/tauri';
 
@@ -132,8 +133,6 @@ function ModeSelector({ mode, onChange }: { mode: 'plan' | 'build', onChange: (m
   );
 }
 
-// ── Context Ring ──
-
 function ContextRing({ percent }: { percent: number }) {
   const size = 16;
   const strokeWidth = 2;
@@ -171,8 +170,6 @@ function ContextRing({ percent }: { percent: number }) {
   );
 }
 
-// ── Context Usage ──
-
 function ContextUsage({
   percent,
   tokens,
@@ -182,7 +179,7 @@ function ContextUsage({
   tokens: string;
   spent: string;
 }) {
-  const [open, setOpen] = useState(false);
+  const[open, setOpen] = useState(false);
 
   return (
     <div
@@ -224,8 +221,6 @@ function ContextUsage({
   );
 }
 
-// ── Constants ──
-
 let providersCache: { all: ProviderInfo[] } | null = null;
 
 function getModelLabel(id?: string | null) {
@@ -237,8 +232,6 @@ function getModelLabel(id?: string | null) {
   }
   return id.split('/').pop() || id;
 }
-
-// ── Sidebar Item ──
 
 function SidebarItem({
   icon,
@@ -283,8 +276,6 @@ function SidebarItem({
   );
 }
 
-// ── Suggestion Card ──
-
 function SuggestionCard({
   icon,
   iconBg,
@@ -318,8 +309,6 @@ function SuggestionCard({
   );
 }
 
-// ── Model Dropdown (for chat toolbar) ──
-
 function ModelDropdown({
   config,
   providers,
@@ -337,8 +326,8 @@ function ModelDropdown({
   const ref = useRef<HTMLDivElement>(null);
 
   const flattenedModels = useMemo(() => {
-    const list: { id: string; label: string; desc: string; context: string; priceIn: string; priceOut: string; isFree: boolean }[] = [];
-    const freeSet = new Set(availableModels || []);
+    const list: { id: string; label: string; desc: string; context: string; priceIn: string; priceOut: string; isFree: boolean }[] =[];
+    const freeSet = new Set(availableModels ||[]);
     providers.forEach(p => {
       Object.entries(p.models || {}).forEach(([mId, m]) => {
         const bareId = mId.includes('/') ? mId.split('/')[1]! : mId;
@@ -369,7 +358,7 @@ function ModelDropdown({
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, []);
+  },[]);
 
   const pick = async (id: string) => {
     setSaving(id);
@@ -498,8 +487,6 @@ function ModelDropdown({
   );
 }
 
-// ── Inline Model Picker (for landing page) ──
-
 function InlineModelPicker({
   config,
   providers,
@@ -515,7 +502,7 @@ function InlineModelPicker({
 
   const flattenedModels = useMemo(() => {
     const list: { id: string; label: string; desc: string; context: string; priceIn: string; priceOut: string; isFree: boolean }[] = [];
-    const freeSet = new Set(availableModels || []);
+    const freeSet = new Set(availableModels ||[]);
     providers.forEach(p => {
       Object.entries(p.models || {}).forEach(([mId, m]) => {
         const bareId = mId.includes('/') ? mId.split('/')[1]! : mId;
@@ -599,8 +586,6 @@ function InlineModelPicker({
   );
 }
 
-// ── Working Indicator ──
-
 function WorkingIndicator({ elapsed }: { elapsed: number }) {
   return (
     <div className="flex items-center justify-center gap-2 text-[12px] text-neutral-500 py-3">
@@ -621,8 +606,6 @@ function WorkingIndicator({ elapsed }: { elapsed: number }) {
   );
 }
 
-// ── Virtualized Chat (culled rendering) ──
-
 function VirtualizedChat({
   messages,
   messagesEndRef,
@@ -638,7 +621,6 @@ function VirtualizedChat({
     <div ref={containerRef} className="flex-1 overflow-y-auto custom-scrollbar">
       <div className="max-w-[780px] mx-auto w-full py-6 px-5 space-y-5">
         {isLoading && messages.length === 0 ? (
-          // Skeleton while loading
           <>
             {[1, 2, 3].map((i) => (
               <div key={i} className="animate-pulse space-y-3">
@@ -668,19 +650,23 @@ function VirtualizedChat({
   );
 }
 
-// ── Main App ──
-
 export default function App() {
   const [isPinned, setIsPinned] = useState(true);
-  const [isHovered, setIsHovered] = useState(false);
+  const[isHovered, setIsHovered] = useState(false);
   const [input, setInput] = useState('');
   const [config, setConfig] = useState<ConfigInfo | null>(null);
-  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const[providers, setProviders] = useState<ProviderInfo[]>([]);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [showFileTree, setShowFileTree] = useState(false);
   const [showGitPanel, setShowGitPanel] = useState(false);
+  
+  // Terminal sizing state
+  const [showTerminal, setShowTerminal] = useState(false);
+  const[terminalHeight, setTerminalHeight] = useState(380);
+  const [isDraggingTerminal, setIsDraggingTerminal] = useState(false);
+
   const [elapsed, setElapsed] = useState(0);
-  const [showSettings, setShowSettings] = useState(false);
+  const[showSettings, setShowSettings] = useState(false);
   const [appMode, setAppMode] = useState<'plan' | 'build'>('build');
 
   const isVisible = isPinned || isHovered;
@@ -707,13 +693,12 @@ export default function App() {
     getAvailableModels()
       .then(setAvailableModels)
       .catch(console.error);
-  }, []);
+  },[]);
 
   useEffect(() => {
     loadConfig();
   }, [loadConfig]);
 
-  // Find context limit from providers cache, matching OpenChamber's calculation
   const findContextLimit = useCallback((modelId: string): number => {
     const pCache = providersCache;
     if (!pCache) return 200000;
@@ -725,7 +710,7 @@ export default function App() {
       }
     }
     return 200000;
-  }, []);
+  },[]);
 
   useEffect(() => {
     if (config?.model) {
@@ -733,7 +718,6 @@ export default function App() {
       const providerId = parts.length > 1 ? parts[0]! : 'opencode';
       const modelId = parts.length > 1 ? parts[1]! : parts[0]!;
 
-      // Try providers first, then fallback to getModelInfo
       const cachedLimit = findContextLimit(modelId);
       if (cachedLimit !== 200000) {
         setContextLimit(cachedLimit);
@@ -749,7 +733,7 @@ export default function App() {
           setContextLimit(200000);
         });
     }
-  }, [config?.model, findContextLimit]);
+  },[config?.model, findContextLimit]);
 
   useEffect(() => {
     if (config?.project_dir) loadDirectory(config.project_dir);
@@ -762,14 +746,12 @@ export default function App() {
       suppressAutoLoadSessionRef.current = null;
       return;
     }
-
-    // Don't clear messages - just reload to preserve current tokens
     loadMessages(activeSessionId);
-  }, [activeSessionId, loadMessages]);
+  },[activeSessionId, loadMessages]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, status]);
+  },[messages, status]);
 
   useEffect(() => {
     const ta = textareaRef.current || bottomTextareaRef.current;
@@ -779,7 +761,6 @@ export default function App() {
     }
   }, [input]);
 
-  // Elapsed timer for streaming
   useEffect(() => {
     if (!isStreaming) {
       setElapsed(0);
@@ -810,7 +791,7 @@ export default function App() {
 
     await send(sessionId, text, appMode);
     setInput('');
-  }, [input, isStreaming, config?.model, activeSessionId, createSession, send, appMode]);
+  },[input, isStreaming, config?.model, activeSessionId, createSession, send, appMode]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -824,11 +805,46 @@ export default function App() {
     clearMessages();
   };
 
+  // ── Drag & Resize Logic for Terminal Panel ──
+  const handleTerminalResize = (e: React.MouseEvent) => {
+    if (e.shiftKey) {
+      setTerminalHeight(380);
+      return;
+    }
+    
+    e.preventDefault();
+    setIsDraggingTerminal(true);
+    const startY = e.clientY;
+    const startHeight = terminalHeight;
+
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const delta = startY - moveEvent.clientY;
+      let newHeight = startHeight + delta;
+      
+      // Clamp between 100px and 85% of screen height
+      newHeight = Math.max(100, Math.min(newHeight, window.innerHeight * 0.85));
+      setTerminalHeight(newHeight);
+    };
+
+    const onMouseUp = () => {
+      setIsDraggingTerminal(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  };
+
   const hasMessages = messages.length > 0;
   const canSend = !!input.trim() && !isStreaming && !!config?.model;
   const usage = getSessionUsage();
   
-  // Calculate context usage percentage matching OpenCode native TUI
   const usagePercent = contextLimit > 0 ? Math.min(100, Math.floor((usage.contextTokens / contextLimit) * 100)) : 0;
   const costStr = `$${usage.cost.toFixed(4)}`;
   const tokenStr = usage.totalTokens.toLocaleString();
@@ -838,6 +854,7 @@ export default function App() {
       <AnimatePresence>
         {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
       </AnimatePresence>
+      
       {/* Window Controls */}
       <div className="absolute top-0 left-0 h-12 flex items-center px-4 gap-2 z-40 pointer-events-none">
         <div className="w-3 h-3 rounded-full bg-[#ff5f56] pointer-events-auto cursor-pointer" />
@@ -845,7 +862,6 @@ export default function App() {
         <div className="w-3 h-3 rounded-full bg-[#27c93f] pointer-events-auto cursor-pointer" />
       </div>
 
-      {/* Hover Trigger */}
       {!isPinned && (
         <div
           className="absolute left-0 top-0 bottom-0 w-8 z-20 cursor-pointer"
@@ -853,7 +869,6 @@ export default function App() {
         />
       )}
 
-      {/* Spacer */}
       <motion.div
         initial={false}
         animate={{ width: isPinned ? 260 : 0 }}
@@ -1008,242 +1023,277 @@ export default function App() {
         </div>
       </motion.div>
 
-      {/* ── Main Content ── */}
+      {/* ── Main Content Area ── */}
       <div className="flex-1 flex flex-col relative overflow-hidden bg-[#0a0a0a]">
-        {!hasMessages ? (
-          <>
-            {/* ── Landing ── */}
-            <div
-              className="absolute inset-0 opacity-[0.08] pointer-events-none"
-              style={{
-                backgroundImage: `radial-gradient(circle, #ffffff 1px, transparent 1px)`,
-                backgroundSize: '32px 32px',
-              }}
-            />
-            <div className="absolute inset-0 bg-gradient-to-b from-transparent via-[#0a0a0a]/60 to-[#0a0a0a] pointer-events-none" />
-
-            <div className="flex-1 flex flex-col items-center justify-center max-w-3xl mx-auto w-full px-8 z-10 -mt-8">
-              <div className="flex flex-col items-center mb-8">
-                <div className="mb-5 opacity-80">
-                  <ClonkLogo className="w-14 h-14 text-neutral-400" />
-                </div>
-                <h1 className="text-[44px] font-medium text-neutral-100 tracking-tight">
-                  Let's clonk
-                </h1>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex gap-3 mb-8">
-                <button
-                  onClick={handleNewChat}
-                  className="bg-transparent hover:bg-[#1a1a1a] border border-[#333] rounded-full py-2.5 px-5 flex items-center gap-2 text-sm text-neutral-200 transition-colors"
-                >
-                  <Plus size={16} />
-                  New Project
-                </button>
-                <button className="bg-transparent hover:bg-[#1a1a1a] border border-transparent hover:border-[#333] rounded-full py-2.5 px-5 flex items-center gap-2 text-sm text-neutral-400 transition-colors">
-                  <FolderOpen size={16} />
-                  Existing Project
-                </button>
-              </div>
-
-              {/* Inline Model Picker */}
-              <InlineModelPicker 
-                config={config} 
-                providers={providers}
-                availableModels={availableModels}
-                onChanged={() => {
-                  clearMessages();
-                  loadConfig();
-                }} 
+        
+        {/* Chat / Landing Zone */}
+        <div className="flex-1 flex flex-col relative overflow-hidden">
+          {!hasMessages ? (
+            <>
+              {/* ── Landing ── */}
+              <div
+                className="absolute inset-0 opacity-[0.08] pointer-events-none"
+                style={{
+                  backgroundImage: `radial-gradient(circle, #ffffff 1px, transparent 1px)`,
+                  backgroundSize: '32px 32px',
+                }}
               />
+              <div className="absolute inset-0 bg-gradient-to-b from-transparent via-[#0a0a0a]/60 to-[#0a0a0a] pointer-events-none" />
 
-              {/* Input */}
-              <div className="w-full bg-[#111] border border-[#282828] rounded-2xl p-5 shadow-2xl shadow-black/30 focus-within:border-[#444] transition-colors">
-                <textarea
-                  ref={textareaRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  disabled={isStreaming || !config?.model}
-                  className="w-full bg-transparent text-neutral-200 placeholder-neutral-600 resize-none outline-none text-[15px] min-h-[100px] disabled:opacity-50"
-                  placeholder={
-                    config?.model
-                      ? 'Describe what you want to build...'
-                      : 'Select a model above to start...'
-                  }
-                />
-                <div className="flex items-center justify-between mt-3">
-                  <div className="flex items-center gap-2">
-                    <button className="text-neutral-500 hover:text-neutral-300 transition-colors p-1.5 rounded-lg hover:bg-[#222]">
-                      <ImageIcon size={18} />
-                    </button>
-                    <ModelDropdown 
-                      config={config} 
-                      providers={providers} 
-                      availableModels={availableModels}
-                      onChanged={loadConfig} 
-                    />
-                    <div className="h-4 w-px bg-[#282828] mx-1" />
-                    <button className="flex items-center gap-1.5 text-sm text-neutral-400 hover:text-neutral-200 transition-colors p-1.5 rounded-lg hover:bg-[#222]">
-                      <CircleDashed size={16} className="text-[#e0443e]" />
-                      MCP Servers
-                      <ChevronDown size={14} className="opacity-50" />
-                    </button>
+              <div className="flex-1 flex flex-col items-center justify-center max-w-3xl mx-auto w-full px-8 z-10 -mt-8">
+                <div className="flex flex-col items-center mb-8">
+                  <div className="mb-5 opacity-80">
+                    <ClonkLogo className="w-14 h-14 text-neutral-400" />
                   </div>
+                  <h1 className="text-[44px] font-medium text-neutral-100 tracking-tight">
+                    Let's clonk
+                  </h1>
+                </div>
+
+                <div className="flex gap-3 mb-8">
                   <button
-                    onClick={handleSend}
-                    disabled={!canSend}
-                    className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                      canSend
-                        ? 'bg-white text-black hover:bg-neutral-200'
-                        : 'bg-[#222] text-neutral-500 cursor-not-allowed'
-                    }`}
+                    onClick={handleNewChat}
+                    className="bg-transparent hover:bg-[#1a1a1a] border border-[#333] rounded-full py-2.5 px-5 flex items-center gap-2 text-sm text-neutral-200 transition-colors"
                   >
-                    Send
+                    <Plus size={16} />
+                    New Project
+                  </button>
+                  <button className="bg-transparent hover:bg-[#1a1a1a] border border-transparent hover:border-[#333] rounded-full py-2.5 px-5 flex items-center gap-2 text-sm text-neutral-400 transition-colors">
+                    <FolderOpen size={16} />
+                    Existing Project
                   </button>
                 </div>
-              </div>
 
-              {/* Suggestions */}
-              <div className="w-full grid grid-cols-2 gap-4 mt-6">
-                <SuggestionCard
-                  icon={
-                    <div className="w-4 h-4 border-2 border-current rounded-full border-t-transparent animate-spin" />
-                  }
-                  iconBg="bg-[#1a2b4c]"
-                  iconColor="text-[#4a8cff]"
-                  title="3D Solar System"
-                  description="Build an interactive Three.js solar ..."
-                  onClick={() => setInput('Build an interactive 3D solar system with Three.js')}
+                <InlineModelPicker 
+                  config={config} 
+                  providers={providers}
+                  availableModels={availableModels}
+                  onChanged={() => {
+                    clearMessages();
+                    loadConfig();
+                  }} 
                 />
-                <SuggestionCard
-                  icon={<PanelLeft size={16} />}
-                  iconBg="bg-[#2563eb]"
-                  iconColor="text-white"
-                  title="Kanban SaaS Landing Page"
-                  description="Modern landing page for a kanban..."
-                  onClick={() => setInput('Build a modern kanban SaaS landing page')}
-                />
-              </div>
-            </div>
 
-            <div className="absolute bottom-6 right-6 flex gap-6 z-10">
-              <button className="flex items-center gap-2 text-sm text-neutral-500 hover:text-neutral-300 transition-colors">
-                <FolderOpen size={16} />
-                New Project
-              </button>
-              <button className="flex items-center gap-2 text-sm text-neutral-500 hover:text-neutral-300 transition-colors">
-                <GitBranch size={16} />
-                Clone Repository
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            {/* ── Chat ── */}
-            <VirtualizedChat messages={messages} messagesEndRef={messagesEndRef} isLoading={isLoading} />
-
-            {/* Working status */}
-            {isStreaming && <WorkingIndicator elapsed={elapsed} />}
-
-            {/* Chat Input */}
-            <div className="border-t border-[#161616] bg-[#0a0a0a] flex-shrink-0">
-              <div className="max-w-[780px] mx-auto p-4">
-                <div className="bg-[#111] border border-[#2a2a2a] rounded-2xl p-3 focus-within:border-[#444] transition-colors shadow-2xl">
+                <div className="w-full bg-[#111] border border-[#282828] rounded-2xl p-5 shadow-2xl shadow-black/30 focus-within:border-[#444] transition-colors">
                   <textarea
-                    ref={bottomTextareaRef}
-                    className="w-full bg-transparent border-none outline-none text-neutral-200 placeholder-neutral-600 text-[15px] resize-none leading-relaxed min-h-[44px] max-h-[300px] py-1 px-1"
-                    placeholder='Type your message... "@" to target files, skills, or MCP servers'
+                    ref={textareaRef}
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    disabled={isStreaming}
-                    rows={1}
+                    disabled={isStreaming || !config?.model}
+                    className="w-full bg-transparent text-neutral-200 placeholder-neutral-600 resize-none outline-none text-[15px] min-h-[100px] disabled:opacity-50"
+                    placeholder={
+                      config?.model
+                        ? 'Describe what you want to build...'
+                        : 'Select a model above to start...'
+                    }
                   />
-
-                  <div className="flex items-center justify-between mt-2 pl-1">
-                    <div className="flex items-center gap-2.5">
+                  <div className="flex items-center justify-between mt-3">
+                    <div className="flex items-center gap-2">
+                      <button className="text-neutral-500 hover:text-neutral-300 transition-colors p-1.5 rounded-lg hover:bg-[#222]">
+                        <ImageIcon size={18} />
+                      </button>
                       <ModelDropdown 
                         config={config} 
                         providers={providers} 
                         availableModels={availableModels}
                         onChanged={loadConfig} 
                       />
-                      <button className="flex items-center gap-1 text-[13px] text-neutral-400 hover:text-neutral-200 transition-colors p-1 rounded-md hover:bg-[#222]">
-                        <Zap size={14} />
-                        Low
-                        <ChevronDown size={12} className="opacity-50" />
-                      </button>
-                      <div className="h-3 w-px bg-[#2a2a2a]" />
-                      <button className="text-neutral-500 hover:text-neutral-300 transition-colors p-1 rounded-md hover:bg-[#222]">
-                        <Plus size={16} />
-                      </button>
-                      <button className="text-neutral-500 hover:text-neutral-300 transition-colors p-1 rounded-md hover:bg-[#222]">
-                        <ImageIcon size={16} />
-                      </button>
-                      <button className="text-neutral-500 hover:text-neutral-300 transition-colors p-1 rounded-md hover:bg-[#222]">
-                        <McpIcon size={16} />
-                      </button>
-                      <button className="text-neutral-500 hover:text-neutral-300 transition-colors p-1 rounded-md hover:bg-[#222]">
-                        <Layers size={16} />
-                      </button>
-                      <div className="h-3 w-px bg-[#2a2a2a]" />
-                      <ModeSelector mode={appMode} onChange={setAppMode} />
-                      <button 
-                        onClick={() => setShowGitPanel(!showGitPanel)}
-                        className={`flex items-center gap-1.5 text-[13px] transition-colors p-1 rounded-md ${
-                          showGitPanel 
-                            ? 'bg-[#222] text-neutral-200' 
-                            : 'text-neutral-500 hover:text-neutral-200 hover:bg-[#222]'
-                        }`}
-                      >
-                        <GitBranch size={14} />
+                      <div className="h-4 w-px bg-[#282828] mx-1" />
+                      <button className="flex items-center gap-1.5 text-sm text-neutral-400 hover:text-neutral-200 transition-colors p-1.5 rounded-lg hover:bg-[#222]">
+                        <CircleDashed size={16} className="text-[#e0443e]" />
+                        MCP Servers
+                        <ChevronDown size={14} className="opacity-50" />
                       </button>
                     </div>
-
                     <button
                       onClick={handleSend}
-                      className={`w-8 h-8 rounded-[10px] flex items-center justify-center flex-shrink-0 transition-colors ${
-                        isStreaming
-                          ? 'bg-white hover:bg-neutral-200 text-black'
-                          : canSend
-                            ? 'bg-white hover:bg-neutral-200 text-black'
-                            : 'bg-[#222] text-neutral-500 cursor-not-allowed'
+                      disabled={!canSend}
+                      className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                        canSend
+                          ? 'bg-white text-black hover:bg-neutral-200'
+                          : 'bg-[#222] text-neutral-500 cursor-not-allowed'
                       }`}
                     >
-                      {isStreaming ? (
-                        <Square size={12} fill="currentColor" />
-                      ) : (
-                        <ArrowUp size={16} strokeWidth={2.5} />
-                      )}
+                      Send
                     </button>
                   </div>
                 </div>
 
-                {/* Footer bar */}
-                <div className="flex items-center justify-between mt-3 px-2">
-                  <div className="flex items-center gap-4 text-[11px] text-neutral-500">
-                    <button 
-                      onClick={() => setShowGitPanel(true)}
-                      className="flex items-center gap-1.5 hover:text-neutral-300 transition-colors"
-                    >
-                      <GitBranch size={12} />
-                      {git.currentBranch || 'main'}
-                      <ChevronDown size={10} className="opacity-50" />
-                    </button>
-                    <button className="flex items-center gap-1.5 hover:text-neutral-300 transition-colors">
-                      <Shield size={12} />
-                      Full Access
-                      <ChevronDown size={10} className="opacity-50" />
-                    </button>
-                  </div>
-                  <ContextUsage percent={usagePercent} tokens={tokenStr} spent={costStr} />
+                <div className="w-full grid grid-cols-2 gap-4 mt-6">
+                  <SuggestionCard
+                    icon={
+                      <div className="w-4 h-4 border-2 border-current rounded-full border-t-transparent animate-spin" />
+                    }
+                    iconBg="bg-[#1a2b4c]"
+                    iconColor="text-[#4a8cff]"
+                    title="3D Solar System"
+                    description="Build an interactive Three.js solar ..."
+                    onClick={() => setInput('Build an interactive 3D solar system with Three.js')}
+                  />
+                  <SuggestionCard
+                    icon={<PanelLeft size={16} />}
+                    iconBg="bg-[#2563eb]"
+                    iconColor="text-white"
+                    title="Kanban SaaS Landing Page"
+                    description="Modern landing page for a kanban..."
+                    onClick={() => setInput('Build a modern kanban SaaS landing page')}
+                  />
                 </div>
               </div>
-            </div>
-          </>
-        )}
+
+              <div className="absolute bottom-6 right-6 flex gap-6 z-10">
+                <button className="flex items-center gap-2 text-sm text-neutral-500 hover:text-neutral-300 transition-colors">
+                  <FolderOpen size={16} />
+                  New Project
+                </button>
+                <button className="flex items-center gap-2 text-sm text-neutral-500 hover:text-neutral-300 transition-colors">
+                  <GitBranch size={16} />
+                  Clone Repository
+                </button>
+                <button 
+                  onClick={() => setShowTerminal(!showTerminal)}
+                  className={`flex items-center gap-2 text-sm transition-colors ${showTerminal ? 'text-neutral-200' : 'text-neutral-500 hover:text-neutral-300'}`}
+                >
+                  <SquareTerminal size={16} />
+                  Terminal
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* ── Chat ── */}
+              <VirtualizedChat messages={messages} messagesEndRef={messagesEndRef} isLoading={isLoading} />
+
+              {/* Working status */}
+              {isStreaming && <WorkingIndicator elapsed={elapsed} />}
+
+              {/* Chat Input */}
+              <div className="border-t border-[#161616] bg-[#0a0a0a] flex-shrink-0">
+                <div className="max-w-[780px] mx-auto p-4">
+                  <div className="bg-[#111] border border-[#2a2a2a] rounded-2xl p-3 focus-within:border-[#444] transition-colors shadow-2xl">
+                    <textarea
+                      ref={bottomTextareaRef}
+                      className="w-full bg-transparent border-none outline-none text-neutral-200 placeholder-neutral-600 text-[15px] resize-none leading-relaxed min-h-[44px] max-h-[300px] py-1 px-1"
+                      placeholder='Type your message... "@" to target files, skills, or MCP servers'
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      disabled={isStreaming}
+                      rows={1}
+                    />
+
+                    <div className="flex items-center justify-between mt-2 pl-1">
+                      <div className="flex items-center gap-2.5">
+                        <ModelDropdown 
+                          config={config} 
+                          providers={providers} 
+                          availableModels={availableModels}
+                          onChanged={loadConfig} 
+                        />
+                        <button className="flex items-center gap-1 text-[13px] text-neutral-400 hover:text-neutral-200 transition-colors p-1 rounded-md hover:bg-[#222]">
+                          <Zap size={14} />
+                          Low
+                          <ChevronDown size={12} className="opacity-50" />
+                        </button>
+                        <div className="h-3 w-px bg-[#2a2a2a]" />
+                        <button className="text-neutral-500 hover:text-neutral-300 transition-colors p-1 rounded-md hover:bg-[#222]">
+                          <Plus size={16} />
+                        </button>
+                        <button className="text-neutral-500 hover:text-neutral-300 transition-colors p-1 rounded-md hover:bg-[#222]">
+                          <ImageIcon size={16} />
+                        </button>
+                        <button className="text-neutral-500 hover:text-neutral-300 transition-colors p-1 rounded-md hover:bg-[#222]">
+                          <McpIcon size={16} />
+                        </button>
+                        <button className="text-neutral-500 hover:text-neutral-300 transition-colors p-1 rounded-md hover:bg-[#222]">
+                          <Layers size={16} />
+                        </button>
+                        <div className="h-3 w-px bg-[#2a2a2a]" />
+                        <ModeSelector mode={appMode} onChange={setAppMode} />
+                        <button 
+                          onClick={() => setShowGitPanel(!showGitPanel)}
+                          className={`flex items-center gap-1.5 text-[13px] transition-colors p-1 rounded-md ${
+                            showGitPanel 
+                              ? 'bg-[#222] text-neutral-200' 
+                              : 'text-neutral-500 hover:text-neutral-200 hover:bg-[#222]'
+                          }`}
+                        >
+                          <GitBranch size={14} />
+                        </button>
+                      </div>
+
+                      <button
+                        onClick={handleSend}
+                        className={`w-8 h-8 rounded-[10px] flex items-center justify-center flex-shrink-0 transition-colors ${
+                          isStreaming
+                            ? 'bg-white hover:bg-neutral-200 text-black'
+                            : canSend
+                              ? 'bg-white hover:bg-neutral-200 text-black'
+                              : 'bg-[#222] text-neutral-500 cursor-not-allowed'
+                        }`}
+                      >
+                        {isStreaming ? (
+                          <Square size={12} fill="currentColor" />
+                        ) : (
+                          <ArrowUp size={16} strokeWidth={2.5} />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Footer bar */}
+                  <div className="flex items-center justify-between mt-3 px-2">
+                    <div className="flex items-center gap-4 text-[11px] text-neutral-500">
+                      <button 
+                        onClick={() => setShowGitPanel(true)}
+                        className="flex items-center gap-1.5 hover:text-neutral-300 transition-colors"
+                      >
+                        <GitBranch size={12} />
+                        {git.currentBranch || 'main'}
+                        <ChevronDown size={10} className="opacity-50" />
+                      </button>
+                      <button className="flex items-center gap-1.5 hover:text-neutral-300 transition-colors">
+                        <Shield size={12} />
+                        Full Access
+                        <ChevronDown size={10} className="opacity-50" />
+                      </button>
+                      <button 
+                        onClick={() => setShowTerminal(!showTerminal)}
+                        className={`flex items-center gap-1.5 transition-colors ${showTerminal ? 'text-neutral-200' : 'hover:text-neutral-300'}`}
+                      >
+                        <SquareTerminal size={12} />
+                        Terminal
+                      </button>
+                    </div>
+                    <ContextUsage percent={usagePercent} tokens={tokenStr} spent={costStr} />
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* ── Global Terminal Panel Bottom Slider ── */}
+        <motion.div
+          initial={false}
+          animate={{ 
+            height: showTerminal ? terminalHeight : 0,
+            opacity: showTerminal ? 1 : 0
+          }}
+          transition={isDraggingTerminal ? { duration: 0 } : { type: "spring", bounce: 0, duration: 0.3 }}
+          className="w-full flex-shrink-0 bg-[#0a0a0a] border-t border-white/[0.04] overflow-hidden z-40 flex flex-col relative shadow-[0_-12px_30px_rgba(0,0,0,0.4)]"
+        >
+          {showTerminal && (
+            <div 
+              className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize z-50 hover:bg-white/10 transition-colors"
+              onMouseDown={handleTerminalResize}
+            />
+          )}
+
+          {showTerminal && <TerminalPanel onClose={() => setShowTerminal(false)} />}
+        </motion.div>
+
       </div>
 
       {/* Git Panel - Right Sidebar */}

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{native_pty_system, CommandBuilder, PtySize, Child};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
@@ -8,7 +8,7 @@ pub type PtyState = Arc<Mutex<PtyManager>>;
 
 pub struct PtyHandle {
     // Keep the child alive so the shell doesn't terminate
-    _child: Box<dyn portable_pty::Child + Send + Sync>,
+    child: Box<dyn Child + Send + Sync>,
     master: Box<dyn portable_pty::MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     // Channel receiver for non-blocking reads
@@ -73,11 +73,13 @@ impl PtyManager {
         
         let mut cmd = CommandBuilder::new(&shell);
         
-        if let Ok(home) = std::env::var("USERPROFILE") {
-            println!("[PTY] Setting cwd to: {}", home);
-            cmd.cwd(std::path::Path::new(&home));
-        } else if let Ok(cwd) = std::env::current_dir() {
+        // Use current working directory (where branchcode was launched / project dir)
+        if let Ok(cwd) = std::env::current_dir() {
+            println!("[PTY] Setting cwd to: {}", cwd.display());
             cmd.cwd(cwd);
+        } else if let Ok(home) = std::env::var("USERPROFILE") {
+            println!("[PTY] Falling back to home: {}", home);
+            cmd.cwd(std::path::Path::new(&home));
         }
 
         // Store the child to prevent Drop from terminating the shell!
@@ -124,7 +126,7 @@ impl PtyManager {
         self.handles.insert(
             id.clone(),
             PtyHandle {
-                _child: child,
+                child,
                 master: pair.master, // 'pair.slave' naturally drops here, allowing proper EOF behavior!
                 writer,
                 rx,
@@ -152,7 +154,6 @@ impl PtyManager {
         }
         
         if output.is_empty() {
-            // No data available
             Ok(None)
         } else {
             println!("[PTY] read from {}: {:?}", id, output);
@@ -176,8 +177,22 @@ impl PtyManager {
     pub fn close(&mut self, id: &str) -> Result<()> {
         if let Some(mut handle) = self.handles.remove(id) {
             // Explicitly kill the process when the tab gets closed
-            let _ = handle._child.kill(); 
+            let _ = handle.child.kill(); 
         }
         Ok(())
+    }
+
+    pub fn is_alive(&mut self, id: &str) -> bool {
+        // Check if handle exists
+        if !self.handles.contains_key(id) {
+            return false;
+        }
+        
+        // Check if channel is disconnected (process died)
+        let handle = self.handles.get(id).unwrap();
+        match handle.rx.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
+            _ => true,
+        }
     }
 }

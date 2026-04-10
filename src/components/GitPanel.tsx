@@ -471,7 +471,7 @@ export const GitPanel = memo(function GitPanel({
         ) : activeDockTab === 'todo' ? (
           <TabPlaceholder icon={<ListTodo size={24} />} title="Project Tasks" />
         ) : activeDockTab === 'terminal' ? (
-          <TerminalPanel />
+          <TerminalPanel autoCreate={false} />
         ) : (
           <TabPlaceholder icon={<SquareTerminal size={24} />} title="Terminal & Console" />
         )}
