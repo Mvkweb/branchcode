@@ -15,7 +15,6 @@ export function useTerminal() {
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
   
   const terminalsRef = useRef<TerminalInstance[]>([]);
-  const pollIntervalsRef = useRef<Map<string, number>>(new Map());
   const isInitializedRef = useRef(false);
   const closeTerminalRef = useRef<(_: string) => Promise<void>>(async () => {});
 
@@ -27,12 +26,6 @@ export function useTerminal() {
     try {
       await invoke('close_terminal', { id });
     } catch {}
-
-    const intervalId = pollIntervalsRef.current.get(id);
-    if (intervalId) {
-      clearInterval(intervalId);
-      pollIntervalsRef.current.delete(id);
-    }
 
     const term = terminalsRef.current.find(t => t.id === id);
     if (term) {
@@ -112,23 +105,6 @@ export function useTerminal() {
     setTerminals(prev => [...prev, newInstance]);
     setActiveTerminalId(id);
 
-    const intervalId = window.setInterval(async () => {
-      try {
-        const output = await invoke<string | null>('read_terminal', { id });
-        if (output) {
-          const t = terminalsRef.current.find(term => term.id === id);
-          if (t) t.terminal.write(output);
-        }
-        
-        const isAlive = await invoke<boolean>('is_terminal_alive', { id });
-        if (!isAlive) {
-          closeTerminalRef.current(id);
-        }
-      } catch {}
-    }, 50);
-
-    pollIntervalsRef.current.set(id, intervalId);
-
     return id;
   }, [initTerminal]);
 
@@ -138,9 +114,6 @@ export function useTerminal() {
 
   useEffect(() => {
     return () => {
-      pollIntervalsRef.current.forEach((intervalId) => {
-        clearInterval(intervalId);
-      });
       terminalsRef.current.forEach(t => {
         try { t.terminal.dispose(); } catch {}
         try { t.container.remove(); } catch {}

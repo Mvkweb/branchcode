@@ -1,17 +1,28 @@
 use anyhow::{anyhow, Context, Result};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize, Child};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 pub type PtyState = Arc<Mutex<PtyManager>>;
+
+#[derive(Serialize, Clone)]
+struct PtyData {
+    id: String,
+    data: Vec<u8>,
+}
+
+#[derive(Serialize, Clone)]
+struct PtyExit {
+    id: String,
+}
 
 pub struct PtyHandle {
     child: Box<dyn Child + Send + Sync>,
     master: Box<dyn portable_pty::MasterPty + Send>,
     writer: Box<dyn Write + Send>,
-    rx: std::sync::mpsc::Receiver<String>,
 }
 
 pub struct PtyManager {
@@ -54,7 +65,7 @@ impl PtyManager {
         }
     }
 
-    pub fn spawn(&mut self) -> Result<String> {
+    pub fn spawn(&mut self, app: AppHandle) -> Result<String> {
         let pty_system = native_pty_system();
 
         let pair = pty_system
@@ -86,43 +97,30 @@ impl PtyManager {
         let id = format!("term-{}", self.next_id);
         self.next_id += 1;
 
-        let mut reader = pair
-            .master
-            .try_clone_reader()
-            .context("Failed to clone reader")?;
+        let mut reader = pair.master.try_clone_reader().context("Failed to clone reader")?;
+        let writer = pair.master.take_writer().context("Failed to take writer")?;
 
-        let writer = pair
-            .master
-            .take_writer()
-            .context("Failed to take writer")?;
-
-        let (tx, rx) = std::sync::mpsc::channel();
-        let id_clone = id.clone();
+        let handle = PtyHandle {
+            child,
+            master: pair.master,
+            writer,
+        };
         
+        let thread_id = id.clone();
+        let return_id = id.clone();
+        self.handles.insert(id, handle);
+
         std::thread::spawn(move || {
-            let mut buf = [0u8; 4096];
-            while let Ok(n) = reader.read(&mut buf) {
-                if n == 0 {
-                    break;
-                }
-                let data = String::from_utf8_lossy(&buf[..n]).to_string();
-                if tx.send(data).is_err() {
-                    break;
-                }
+            let mut buf = [0u8; 8192];
+            let mut r = reader;
+            while let Ok(n) = r.read(&mut buf) {
+                if n == 0 { break; }
+                let _ = app.emit("pty:data", PtyData { id: thread_id.clone(), data: buf[..n].to_vec() });
             }
+            let _ = app.emit("pty:exit", PtyExit { id: thread_id });
         });
 
-        self.handles.insert(
-            id.clone(),
-            PtyHandle {
-                child,
-                master: pair.master,
-                writer,
-                rx,
-            },
-        );
-
-        Ok(id)
+        Ok(return_id)
     }
 
     pub fn write(&mut self, id: &str, data: &str) -> Result<()> {
@@ -133,16 +131,7 @@ impl PtyManager {
     }
 
     pub fn read(&mut self, id: &str) -> Result<Option<String>> {
-        let handle = self.handles.get_mut(id).context("Terminal not found")?;
-        let mut output = String::new();
-        while let Ok(data) = handle.rx.try_recv() {
-            output.push_str(&data);
-        }
-        if output.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(output))
-        }
+        Ok(None)
     }
 
     pub fn resize(&mut self, id: &str, cols: u16, rows: u16) -> Result<()> {
@@ -164,21 +153,14 @@ impl PtyManager {
     }
 
     pub fn is_alive(&mut self, id: &str) -> bool {
-        if !self.handles.contains_key(id) {
-            return false;
-        }
-        let handle = self.handles.get(id).unwrap();
-        match handle.rx.try_recv() {
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
-            _ => true,
-        }
+        self.handles.contains_key(id)
     }
 }
 
 #[tauri::command]
-pub fn spawn_terminal(state: State<PtyState>) -> Result<String, String> {
+pub fn spawn_terminal(state: State<PtyState>, app: AppHandle) -> Result<String, String> {
     let mut pty_manager = state.lock().map_err(|e| e.to_string())?;
-    pty_manager.spawn().map_err(|e| e.to_string())
+    pty_manager.spawn(app).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
