@@ -1,198 +1,111 @@
-use anyhow::{Context, Result};
-use portable_pty::{native_pty_system, CommandBuilder, PtySize, Child};
-use std::collections::HashMap;
-use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
+use anyhow::{anyhow, Result};
+use dashmap::DashMap;
+use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use serde::Serialize;
+use std::{io::{Read, Write}, sync::{Arc, Mutex, OnceLock}, sync::atomic::{AtomicU64, Ordering}, time::Duration};
+use tauri::{AppHandle, Emitter, State};
 
-pub type PtyState = Arc<Mutex<PtyManager>>;
+static SHELL: OnceLock<&'static str> = OnceLock::new();
 
-pub struct PtyHandle {
-    // Keep the child alive so the shell doesn't terminate
-    child: Box<dyn Child + Send + Sync>,
-    master: Box<dyn portable_pty::MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
-    // Channel receiver for non-blocking reads
-    rx: std::sync::mpsc::Receiver<String>,
+fn shell() -> &'static str {
+    *SHELL.get_or_init(|| {
+        #[cfg(windows)] {
+            if std::path::Path::new("C:\\Program Files\\PowerShell\\7\\pwsh.exe").exists() {
+                Box::leak("C:\\Program Files\\PowerShell\\7\\pwsh.exe".into())
+            } else {
+                Box::leak("powershell.exe".into())
+            }
+        }
+        #[cfg(not(windows))] {
+            Box::leak(std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into()))
+        }
+    })
 }
 
-pub struct PtyManager {
-    handles: HashMap<String, PtyHandle>,
-    next_id: usize,
+#[derive(Serialize, Clone)] struct PtyData { id: String, data: Vec<u8> }
+#[derive(Serialize, Clone)] struct PtyExit { id: String }
+
+struct Handle {
+    child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
+    writer: Mutex<Box<dyn Write + Send>>,
+    master: Mutex<Box<dyn MasterPty + Send>>,
 }
+
+pub struct PtyManager { map: DashMap<String, Arc<Handle>>, counter: AtomicU64 }
 
 impl PtyManager {
-    pub fn new() -> Self {
-        PtyManager {
-            handles: HashMap::new(),
-            next_id: 1,
-        }
-    }
+    pub fn new() -> Self { Self { map: DashMap::new(), counter: AtomicU64::new(1) } }
 
-    fn detect_shell() -> String {
-        #[cfg(target_os = "windows")]
-        {
-            if std::process::Command::new("pwsh")
-                .args(["-NoProfile", "-Command", "exit 0"])
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-            {
-                return "pwsh.exe".to_string();
-            }
-            if std::process::Command::new("powershell")
-                .args(["-NoProfile", "-Command", "exit 0"])
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-            {
-                return "powershell.exe".to_string();
-            }
-            std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
-        }
-    }
-
-    pub fn spawn(&mut self) -> Result<String> {
-        let pty_system = native_pty_system();
+    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16) -> Result<String> {
+        let pair = native_pty_system().openpty(PtySize { rows, cols, pixel_width: cols * 9, pixel_height: rows * 17 })?;
         
-        let pair = pty_system
-            .openpty(PtySize {
-                rows: 24,
-                cols: 80,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .context("Failed to open PTY")?;
+        let mut cmd = CommandBuilder::new(shell());
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
+        cmd.env("WT_SESSION", "1");
         
-        let shell = Self::detect_shell();
-        println!("[PTY] Detected shell: {}", shell);
+        if let Ok(cwd) = std::env::current_dir() { cmd.cwd(cwd); }
+
+        let child = pair.slave.spawn_command(cmd)?;
+        let id = format!("term-{}", self.counter.fetch_add(1, Ordering::Relaxed));
         
-        let mut cmd = CommandBuilder::new(&shell);
+        let reader = pair.master.try_clone_reader()?;
+        let writer = pair.master.take_writer()?;
         
-        // Use current working directory (where branchcode was launched / project dir)
-        if let Ok(cwd) = std::env::current_dir() {
-            println!("[PTY] Setting cwd to: {}", cwd.display());
-            cmd.cwd(cwd);
-        } else if let Ok(home) = std::env::var("USERPROFILE") {
-            println!("[PTY] Falling back to home: {}", home);
-            cmd.cwd(std::path::Path::new(&home));
-        }
+        let handle = Arc::new(Handle { child: Mutex::new(child), writer: Mutex::new(writer), master: Mutex::new(pair.master) });
+        self.map.insert(id.clone(), handle.clone());
 
-        // Store the child to prevent Drop from terminating the shell!
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .context("Failed to spawn shell")?;
+        std::thread::spawn({ let app = app.clone(); let id = id.clone(); move || {
+            let mut buf = [0u8; 8192]; let mut r = reader;
+            while let Ok(n) = r.read(&mut buf) { if n == 0 { break } let _ = app.emit("pty:data", PtyData { id: id.clone(), data: buf[..n].to_vec() }); }
+        }});
+
+        std::thread::spawn({ let app = app.clone(); let id = id.clone(); let h = handle.clone(); move || loop {
+            std::thread::sleep(Duration::from_millis(150));
+            if h.child.lock().unwrap().try_wait().ok().flatten().is_some() { let _ = app.emit("pty:exit", PtyExit { id }); break; }
+        }});
         
-        let id = format!("term-{}", self.next_id);
-        self.next_id += 1;
-        println!("[PTY] Created terminal: {}", id);
-
-        let mut reader = pair
-            .master
-            .try_clone_reader()
-            .context("Failed to clone reader")?;
-        
-        let writer = pair
-            .master
-            .take_writer()
-            .context("Failed to take writer")?;
-
-        // Background thread: continuously read from the pipe and funnel data through MPSC
-        let (tx, rx) = std::sync::mpsc::channel();
-        let id_clone = id.clone();
-        std::thread::spawn(move || {
-            println!("[PTY] Reader thread started for {}", id_clone);
-            let mut buf = [0u8; 4096];
-            while let Ok(n) = reader.read(&mut buf) {
-                if n == 0 { 
-                    println!("[PTY] EOF for {}", id_clone);
-                    break; // EOF reached
-                }
-                let data = String::from_utf8_lossy(&buf[..n]).to_string();
-                println!("[PTY] Read {} bytes from {}", n, id_clone);
-                if tx.send(data).is_err() {
-                    println!("[PTY] Channel send failed for {}", id_clone);
-                    break; // Receiver channel dropped
-                }
-            }
-            println!("[PTY] Reader thread ending for {}", id_clone);
-        });
-
-        self.handles.insert(
-            id.clone(),
-            PtyHandle {
-                child,
-                master: pair.master, // 'pair.slave' naturally drops here, allowing proper EOF behavior!
-                writer,
-                rx,
-            },
-        );
-
         Ok(id)
     }
 
-    pub fn write(&mut self, id: &str, data: &str) -> Result<()> {
-        let handle = self.handles.get_mut(id).context("Terminal not found")?;
-        println!("[PTY] write to {}: {:?}", id, data);
-        handle.writer.write_all(data.as_bytes())?;
-        handle.writer.flush()?;
+    pub fn write(&self, id: &str, data: &str) -> Result<()> {
+        let h = self.map.get(id).ok_or_else(|| anyhow!("gone"))?;
+        let mut w = h.writer.lock().unwrap();
+        w.write_all(data.as_bytes())?;
+        w.flush()?;
         Ok(())
     }
 
-    pub fn read(&mut self, id: &str) -> Result<Option<String>> {
-        let handle = self.handles.get_mut(id).context("Terminal not found")?;
-
-        let mut output = String::new();
-        // try_recv is NON-BLOCKING! If there's no data, it immediately breaks the loop.
-        while let Ok(data) = handle.rx.try_recv() {
-            output.push_str(&data);
-        }
-        
-        if output.is_empty() {
-            Ok(None)
-        } else {
-            println!("[PTY] read from {}: {:?}", id, output);
-            Ok(Some(output))
-        }
-    }
-
-    pub fn resize(&mut self, id: &str, cols: u16, rows: u16) -> Result<()> {
-        let handle = self.handles.get_mut(id).context("Terminal not found")?;
-        
-        handle.master.resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        }).context("Failed to resize terminal")?;
-        
+    pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<()> {
+        let h = self.map.get(id).ok_or_else(|| anyhow!("gone"))?;
+        h.master.lock().unwrap().resize(PtySize { rows, cols, pixel_width: cols * 9, pixel_height: rows * 17 })?;
         Ok(())
     }
 
-    pub fn close(&mut self, id: &str) -> Result<()> {
-        if let Some(mut handle) = self.handles.remove(id) {
-            // Explicitly kill the process when the tab gets closed
-            let _ = handle.child.kill(); 
-        }
+    pub fn close(&self, id: &str) -> Result<()> {
+        if let Some((_, h)) = self.map.remove(id) { let _ = h.child.lock().unwrap().kill(); }
         Ok(())
     }
+}
 
-    pub fn is_alive(&mut self, id: &str) -> bool {
-        // Check if handle exists
-        if !self.handles.contains_key(id) {
-            return false;
-        }
-        
-        // Check if channel is disconnected (process died)
-        let handle = self.handles.get(id).unwrap();
-        match handle.rx.try_recv() {
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
-            _ => true,
-        }
-    }
+pub type PtyState = Arc<PtyManager>;
+
+#[tauri::command]
+pub fn spawn_terminal(s: State<PtyState>, a: AppHandle, cols: u16, rows: u16) -> Result<String, String> {
+    s.spawn(a, cols, rows).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn write_terminal(s: State<PtyState>, id: String, data: String) -> Result<(), String> {
+    s.write(&id, &data).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn resize_terminal(s: State<PtyState>, id: String, cols: u16, rows: u16) -> Result<(), String> {
+    s.resize(&id, cols, rows).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn close_terminal(s: State<PtyState>, id: String) -> Result<(), String> {
+    s.close(&id).map_err(|e| e.to_string())
 }

@@ -23,6 +23,7 @@ dirs = "6"
 urlencoding = "2"
 portable-pty = "0.8"
 anyhow = "1"
+dashmap = "6"
 
 [lib]
 name = "branchcode_lib"

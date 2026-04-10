@@ -4,9 +4,9 @@ mod git;
 mod pty;
 
 use opencode_client::OcStreamEvent;
-use pty::{PtyManager, PtyState};
+use pty::PtyState;
 use serde::Serialize;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tauri::ipc::Channel;
 use tauri::State;
 
@@ -269,44 +269,6 @@ fn get_git_diff_stats(state: State<AppState>) -> Result<Vec<git::GitFile>, Strin
     }
 }
 
-// ── Terminal commands ──
-
-#[tauri::command]
-fn spawn_terminal(state: State<'_, PtyState>) -> Result<String, String> {
-    let mut pty_manager = state.lock().map_err(|e| e.to_string())?;
-    pty_manager.spawn().map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn write_terminal(id: String, data: String, state: State<'_, PtyState>) -> Result<(), String> {
-    let mut pty_manager = state.lock().map_err(|e| e.to_string())?;
-    pty_manager.write(&id, &data).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn read_terminal(id: String, state: State<'_, PtyState>) -> Result<Option<String>, String> {
-    let mut pty_manager = state.lock().map_err(|e| e.to_string())?;
-    pty_manager.read(&id).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn resize_terminal(id: String, cols: u16, rows: u16, state: State<'_, PtyState>) -> Result<(), String> {
-    let mut pty_manager = state.lock().map_err(|e| e.to_string())?;
-    pty_manager.resize(&id, cols, rows).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn close_terminal(id: String, state: State<'_, PtyState>) -> Result<(), String> {
-    let mut pty_manager = state.lock().map_err(|e| e.to_string())?;
-    pty_manager.close(&id).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn is_terminal_alive(id: String, state: State<'_, PtyState>) -> Result<bool, String> {
-    let mut pty_manager = state.lock().map_err(|e| e.to_string())?;
-    Ok(pty_manager.is_alive(&id))
-}
-
 // ── App setup ──
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -350,7 +312,7 @@ pub fn run() {
         project_dir,
         model: std::sync::Mutex::new(String::new()),
         git: std::sync::Mutex::new(Some(git_service)),
-        pty: Arc::new(Mutex::new(PtyManager::new())),
+        pty: Arc::new(pty::PtyManager::new()),
     };
 
     tauri::Builder::default()
@@ -383,12 +345,10 @@ pub fn run() {
             stage_all,
             commit,
             get_git_diff_stats,
-            spawn_terminal,
-            write_terminal,
-            read_terminal,
-            resize_terminal,
-            close_terminal,
-            is_terminal_alive,
+            pty::spawn_terminal,
+            pty::write_terminal,
+            pty::resize_terminal,
+            pty::close_terminal,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
