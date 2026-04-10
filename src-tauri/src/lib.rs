@@ -6,7 +6,7 @@ mod pty;
 use opencode_client::OcStreamEvent;
 use pty::PtyState;
 use serde::Serialize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
 use tauri::State;
 
@@ -312,7 +312,7 @@ pub fn run() {
         project_dir,
         model: std::sync::Mutex::new(String::new()),
         git: std::sync::Mutex::new(Some(git_service)),
-        pty: Arc::new(pty::PtyManager::new()),
+        pty: Arc::new(Mutex::new(pty::PtyManager::new())),
     };
 
     tauri::Builder::default()
@@ -347,8 +347,10 @@ pub fn run() {
             get_git_diff_stats,
             pty::spawn_terminal,
             pty::write_terminal,
+            pty::read_terminal,
             pty::resize_terminal,
             pty::close_terminal,
+            pty::is_terminal_alive,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

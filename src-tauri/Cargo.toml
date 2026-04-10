@@ -24,6 +24,7 @@ urlencoding = "2"
 portable-pty = "0.8"
 anyhow = "1"
 dashmap = "6"
+base64 = "0.22"
 
 [lib]
 name = "branchcode_lib"

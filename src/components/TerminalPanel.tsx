@@ -1,36 +1,72 @@
 import { useEffect, useRef } from 'react';
 import { X, Plus, Terminal as TerminalIcon } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { useTerminal } from '../hooks/useTerminal';
+import { useTerminal, type TerminalInstance } from '../hooks/useTerminal';
 
-function TerminalView({ term, active }: { term: any; active: boolean }) {
+function TerminalView({ term, active }: { term: TerminalInstance; active: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
-  
+  const resizeTimeout = useRef<NodeJS.Timeout | null>(null);
+
   useEffect(() => {
-    if (!ref.current) return;
+    if (!ref.current || !term.container) return;
     if (!ref.current.contains(term.container)) {
       ref.current.appendChild(term.container);
     }
-    if (active) {
-      term.fitAddon.fit();
-      invoke('resize_terminal', { id: term.id, cols: term.terminal.cols, rows: term.terminal.rows });
-    }
-  }, [term, active]);
-  
-  return <div ref={ref} className={`absolute inset-0 ${active ? 'block' : 'hidden'}`} />;
+  }, [term.container]);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !active) return;
+
+    const doResize = () => {
+      if (!ref.current || ref.current.clientWidth === 0) return;
+      try {
+        term.fitAddon.fit();
+        invoke('resize_terminal', {
+          id: term.id,
+          cols: term.terminal.cols,
+          rows: term.terminal.rows,
+        }).catch(() => {});
+      } catch {}
+    };
+
+    doResize();
+
+    const resizeObserver = new ResizeObserver(() => {
+      if (resizeTimeout.current) clearTimeout(resizeTimeout.current);
+      resizeTimeout.current = setTimeout(doResize, 50);
+    });
+
+    resizeObserver.observe(el);
+
+    return () => {
+      resizeObserver.disconnect();
+      if (resizeTimeout.current) clearTimeout(resizeTimeout.current);
+    };
+  }, [active, term.id]);
+
+  return (
+    <div
+      ref={ref}
+      tabIndex={-1}
+      className={`absolute inset-0 ${active ? 'block' : 'hidden'}`}
+    />
+  );
 }
 
-export function TerminalPanel({ onClose }: { onClose?: () => void }) {
+export function TerminalPanel({ onClose, isOpen }: { onClose?: () => void; isOpen: boolean }) {
   const { terminals, activeTerminalId, createTerminal, closeTerminal, setActiveTerminal } = useTerminal();
-  
+
   useEffect(() => {
-    if (terminals.length === 0) createTerminal();
-  }, [terminals.length]);
+    if (isOpen && terminals.length === 0) {
+      createTerminal();
+    }
+  }, [isOpen, terminals.length, createTerminal]);
 
   const handleClose = async (id: string) => {
-    const last = terminals.length === 1;
+    const wasLast = terminals.length === 1;
     await closeTerminal(id);
-    if (last) onClose?.();
+    if (wasLast) onClose?.();
   };
 
   return (
@@ -63,8 +99,10 @@ export function TerminalPanel({ onClose }: { onClose?: () => void }) {
           <Plus size={14} />
         </button>
       </div>
-      <div className="flex-1 relative bg-[#0a0a0a]">
-        {terminals.map(t => <TerminalView key={t.id} term={t} active={activeTerminalId === t.id} />)}
+      <div className="flex-1 relative bg-[#0a0a0a] overflow-hidden">
+        {terminals.map(t => (
+          <TerminalView key={t.id} term={t} active={activeTerminalId === t.id} />
+        ))}
       </div>
     </div>
   );

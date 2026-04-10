@@ -1,6 +1,152 @@
 # Terminal Integration Plan for Branchcode
 
-## Overview
+## ⚠️ CRITICAL BUG FIX DOCUMENTATION - READ BEFORE MODIFYING
+
+### The Visual Bug (Text Overwrites/Cursor Jumps)
+
+During implementation, a severe visual bug was discovered where:
+- Text would overwrite itself while typing
+- Cursor would jump around unexpectedly
+- Input line would redraw messily
+- PowerShell prompt would render incorrectly
+
+**ROOT CAUSES (DO NOT REPLICATE):**
+
+1. **Shared Container for Multiple Terminals**
+   - Problem: All terminal instances were rendered into the SAME container div
+   - Result: Multiple ghostty-web canvases drew on top of each other
+   - Fix: Each terminal creates its own `document.createElement('div')` container
+
+2. **Missing `hidden` Class for Inactive Tabs**
+   - Problem: All terminal views were always visible (`block`), not hidden
+   - Result: Inactive terminals still rendered, causing visual overlap
+   - Fix: Use `${active ? 'block' : 'hidden'}` class for terminal visibility
+
+3. **Temp ID Causing Byte Drop**
+   - Problem: Used a temporary ID for the terminal until backend returned the real ID
+   - Result: Initial PowerShell output (prompt, VT sequences) was dropped or misrouted
+   - Fix: Spawn backend FIRST, then create frontend terminal with real ID (no temp ID)
+
+4. **Container Movement During Measurement**
+   - Problem: Container was moved to `document.body` and positioned offscreen for measurement
+   - Result: This caused cols/rows desync between PTY and frontend, breaking line wrapping
+   - Fix: Keep container in place, use FitAddon without DOM teleporting
+
+5. **Missing `WT_SESSION` Environment Variable**
+   - Problem: PowerShell didn't know it was running in a real terminal
+   - Result: PSReadLine (PowerShell's line editing) behaved incorrectly
+   - Fix: Set `WT_SESSION=1` environment variable when spawning shell
+
+6. **Pixel Dimension Mismatch**
+   - Problem: PTY resize used wrong pixel calculations (or 0,0)
+   - Result: Backend thought terminal was different size than frontend
+   - Fix: Use `pixel_width: cols * 9, pixel_height: rows * 17` (9px wide, 17px tall per cell)
+
+### How to Avoid This Bug
+
+When modifying terminal code, follow these rules:
+
+```typescript
+// ✅ CORRECT: Each terminal creates its own container
+const createTerminal = useCallback(async () => {
+  const container = document.createElement('div'); // NEW container each time
+  container.style.width = '100%';
+  container.style.height = '100%';
+  // ... create terminal
+}, []);
+
+// ❌ WRONG: Reuse same container or pass external container
+const createTerminal = useCallback(async (sharedContainer) => {
+  // This causes multiple terminals to fight for DOM space
+}, []);
+```
+
+```tsx
+// ✅ CORRECT: Hide inactive terminals
+return <div className={`absolute inset-0 ${active ? 'block' : 'hidden'}`} />;
+
+// ❌ WRONG: Always show all terminals
+return <div className="absolute inset-0" />;
+```
+
+```typescript
+// ✅ CORRECT: Spawn backend first, then create frontend
+const id = await invoke<string>('spawn_terminal', { cols, rows });
+const term = new Terminal({...});
+term.open(container);
+// Now write to 'id', not a temp ID
+
+// ❌ WRONG: Create frontend with temp ID, then swap after spawn
+const tempId = 'temp-123';
+terminalsRef.current.set(tempId, {...});
+invoke('spawn_terminal', ...).then(realId => {
+  // Race condition: output before this runs goes to tempId which doesn't exist!
+});
+```
+
+```rust
+// ✅ CORRECT: Set WT_SESSION for PowerShell
+let mut cmd = CommandBuilder::new(shell());
+cmd.env("WT_SESSION", "1");  // Tells pwsh it's a real terminal
+
+// ❌ WRONG: Missing WT_SESSION
+let mut cmd = CommandBuilder::new(shell());
+// PowerShell won't enable ANSI properly
+```
+
+```rust
+// ✅ CORRECT: Use proper pixel dimensions
+PtySize {
+    rows,
+    cols,
+    pixel_width: cols * 9,
+    pixel_height: rows * 17,
+}
+
+// ❌ WRONG: Zero pixels or mismatched calculations
+PtySize {
+    rows,
+    cols,
+    pixel_width: 0,  // Let OS decide (sometimes wrong)
+    pixel_height: 0,
+}
+```
+
+### Additional Configuration Notes
+
+1. **convertEol: false**
+   - PowerShell sends `\r` (carriage return) for newlines, not `\n`
+   - Setting `convertEol: false` prevents ghostty-web from incorrectly interpreting `\r` as newline
+   - This keeps the cursor in the correct position for PowerShell's line editing
+
+2. **windowsMode option (if available)**
+   - Some terminal emulators have a `windowsMode` option specifically for Windows console behavior
+   - If ghostty-web types expose this, enable it for better PowerShell compatibility
+   - Currently not in ghostty-web types, so use `convertEol: false` as workaround
+
+3. **Shell Detection Priority**
+   - On Windows, prefer PowerShell 7 (pwsh.exe) → PowerShell 5 (powershell.exe) → cmd.exe
+   - PowerShell has better ANSI support than cmd.exe
+   - Setting `TERM=xterm-256color` helps the shell know terminal capabilities
+
+4. **Streaming TextDecoder**
+   - When receiving PTY output, use `TextDecoder` with `stream: true`
+   - This handles UTF-8 sequences that may be split across multiple packets
+   - Create one decoder per terminal and reuse it
+
+5. **Push Model (No Polling)**
+   - Use Tauri events (`pty:data`) to push output from backend to frontend
+   - This uses ~0% CPU when idle (vs polling which uses constant CPU)
+   - Backend spawns a reader thread that emits events on data availability
+
+6. **Watchdog for External Kill Detection**
+   - Spawn a background thread that checks `child.try_wait()` every ~150ms
+   - If shell is killed externally (e.g., user closes PowerShell window), emit `pty:exit`
+   - This allows the UI to close automatically when the last process dies
+
+---
+
+## Architecture
 
 Add a high-performance integrated terminal to Branchcode using:
 - **Backend**: Rust with `portable-pty` crate

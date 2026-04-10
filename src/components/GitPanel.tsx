@@ -24,7 +24,6 @@ import {
 } from 'lucide-react';
 import type { GitStatus, GitFile, GitBranch as GitBranchType } from '../lib/tauri';
 import { DiffViewer } from './DiffViewer';
-import { TerminalPanel } from './TerminalPanel';
 
 interface GitPanelProps {
   status: GitStatus | null;
@@ -471,7 +470,7 @@ export const GitPanel = memo(function GitPanel({
         ) : activeDockTab === 'todo' ? (
           <TabPlaceholder icon={<ListTodo size={24} />} title="Project Tasks" />
         ) : activeDockTab === 'terminal' ? (
-          <TerminalPanel autoCreate={false} />
+          <TabPlaceholder icon={<SquareTerminal size={24} />} title="Use main terminal" />
         ) : (
           <TabPlaceholder icon={<SquareTerminal size={24} />} title="Terminal & Console" />
         )}

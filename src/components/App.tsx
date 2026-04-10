@@ -1284,14 +1284,12 @@ export default function App() {
           transition={isDraggingTerminal ? { duration: 0 } : { type: "spring", bounce: 0, duration: 0.3 }}
           className="w-full flex-shrink-0 bg-[#0a0a0a] border-t border-white/[0.04] overflow-hidden z-40 flex flex-col relative shadow-[0_-12px_30px_rgba(0,0,0,0.4)]"
         >
-          {showTerminal && (
-            <div 
-              className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize z-50 hover:bg-white/10 transition-colors"
-              onMouseDown={handleTerminalResize}
-            />
-          )}
+          <div 
+            className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize z-50 hover:bg-white/10 transition-colors"
+            onMouseDown={handleTerminalResize}
+          />
 
-          {showTerminal && <TerminalPanel onClose={() => setShowTerminal(false)} />}
+          <TerminalPanel onClose={() => setShowTerminal(false)} isOpen={showTerminal} />
         </motion.div>
 
       </div>

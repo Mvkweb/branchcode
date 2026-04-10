@@ -11,70 +11,148 @@ export interface TerminalInstance {
 }
 
 export function useTerminal() {
-  const terminalsRef = useRef<Map<string, TerminalInstance>>(new Map());
-  const decodersRef = useRef<Map<string, TextDecoder>>(new Map());
-  const [ids, setIds] = useState<string[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [terminals, setTerminals] = useState<TerminalInstance[]>([]);
+  const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
+  
+  const terminalsRef = useRef<TerminalInstance[]>([]);
+  const pollIntervalsRef = useRef<Map<string, number>>(new Map());
+  const isInitializedRef = useRef(false);
+  const closeTerminalRef = useRef<(_: string) => Promise<void>>(async () => {});
 
   useEffect(() => {
-    init();
+    terminalsRef.current = terminals;
+  }, [terminals]);
+
+  const closeTerminal = useCallback(async (id: string) => {
+    try {
+      await invoke('close_terminal', { id });
+    } catch {}
+
+    const intervalId = pollIntervalsRef.current.get(id);
+    if (intervalId) {
+      clearInterval(intervalId);
+      pollIntervalsRef.current.delete(id);
+    }
+
+    const term = terminalsRef.current.find(t => t.id === id);
+    if (term) {
+      try { term.terminal.dispose(); } catch {}
+      try { term.container.remove(); } catch {}
+    }
+
+    setTerminals(prev => prev.filter(t => t.id !== id));
+    if (activeTerminalId === id) {
+      const remaining = terminalsRef.current.filter(t => t.id !== id);
+      setActiveTerminalId(remaining.length > 0 ? remaining[0]?.id ?? null : null);
+    }
+  }, [activeTerminalId]);
+
+  useEffect(() => {
+    closeTerminalRef.current = closeTerminal;
+  }, [closeTerminal]);
+
+  const initTerminal = useCallback(async () => {
+    if (isInitializedRef.current) return;
+    isInitializedRef.current = true;
+    await init();
+
     const unData = listen<{id: string, data: number[]}>('pty:data', e => {
-      const t = terminalsRef.current.get(e.payload.id);
+      const t = terminalsRef.current.find(term => term.id === e.payload.id);
       if (!t) return;
-      let dec = decodersRef.current.get(e.payload.id);
-      if (!dec) { dec = new TextDecoder('utf-8', {fatal:false}); decodersRef.current.set(e.payload.id, dec); }
-      t.terminal.write(dec.decode(new Uint8Array(e.payload.data), {stream:true}));
+      const dec = new TextDecoder('utf-8', { fatal: false });
+      const text = dec.decode(new Uint8Array(e.payload.data), { stream: true });
+      if (text) t.terminal.write(text);
     });
-    const unExit = listen<{id: string}>('pty:exit', e => closeTerminal(e.payload.id));
-    return () => { unData.then(f => f()); unExit.then(f => f()); };
+
+    const unExit = listen<{id: string}>('pty:exit', e => {
+      closeTerminalRef.current(e.payload.id);
+    });
+
+    return () => {
+      unData.then(f => f());
+      unExit.then(f => f());
+    };
   }, []);
 
   const createTerminal = useCallback(async () => {
+    await initTerminal();
+
     const container = document.createElement('div');
     container.style.width = '100%';
     container.style.height = '100%';
-    
+
     const term = new Terminal({
       fontSize: 14,
       fontFamily: 'JetBrains Mono, Consolas, monospace',
       theme: { background: '#0d0d0d', foreground: '#e4e4e7' },
       cursorBlink: true,
-      cursorStyle: 'block',
+      cursorStyle: 'bar',
       convertEol: false,
       scrollback: 10000,
     } as any);
-    
-    const fit = new FitAddon();
-    term.loadAddon(fit);
+
+    const fitAddon = new FitAddon();
+    term.loadAddon(fitAddon);
     term.open(container);
-    fit.fit();
-    
-    const cols = Math.max(term.cols, 80);
-    const rows = Math.max(term.rows, 24);
-    const id = await invoke<string>('spawn_terminal', { cols, rows });
-    
-    term.onData(d => invoke('write_terminal', { id, data: d }).catch(() => {}));
-    
-    terminalsRef.current.set(id, { id, terminal: term, container, fitAddon: fit });
-    setIds(p => [...p, id]);
-    setActiveId(id);
-    
+    fitAddon.fit();
+
+    const id = await invoke<string>('spawn_terminal');
+
+    term.onData((data: string) => {
+      invoke('write_terminal', { id, data }).catch(() => {});
+    });
+
+    const newInstance: TerminalInstance = {
+      id,
+      terminal: term,
+      container,
+      fitAddon,
+    };
+
+    setTerminals(prev => [...prev, newInstance]);
+    setActiveTerminalId(id);
+
+    const intervalId = window.setInterval(async () => {
+      try {
+        const output = await invoke<string | null>('read_terminal', { id });
+        if (output) {
+          const t = terminalsRef.current.find(term => term.id === id);
+          if (t) t.terminal.write(output);
+        }
+        
+        const isAlive = await invoke<boolean>('is_terminal_alive', { id });
+        if (!isAlive) {
+          closeTerminalRef.current(id);
+        }
+      } catch {}
+    }, 50);
+
+    pollIntervalsRef.current.set(id, intervalId);
+
     return id;
+  }, [initTerminal]);
+
+  const setActiveTerminal = useCallback((id: string) => {
+    setActiveTerminalId(id);
   }, []);
 
-  const closeTerminal = useCallback(async (id: string) => {
-    await invoke('close_terminal', { id }).catch(() => {});
-    terminalsRef.current.get(id)?.terminal.dispose();
-    terminalsRef.current.delete(id);
-    decodersRef.current.delete(id);
-    setIds(p => { const n = p.filter(x => x !== id); if (activeId === id) setActiveId(n[0] ?? null); return n; });
-  }, [activeId]);
+  useEffect(() => {
+    return () => {
+      pollIntervalsRef.current.forEach((intervalId) => {
+        clearInterval(intervalId);
+      });
+      terminalsRef.current.forEach(t => {
+        try { t.terminal.dispose(); } catch {}
+        try { t.container.remove(); } catch {}
+      });
+    };
+  }, []);
 
   return {
-    terminals: ids.map(id => terminalsRef.current.get(id)!).filter(Boolean),
-    activeTerminalId: activeId,
+    terminals,
+    activeTerminalId,
     createTerminal,
     closeTerminal,
-    setActiveTerminal: setActiveId,
+    setActiveTerminal,
   };
 }
