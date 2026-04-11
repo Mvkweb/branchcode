@@ -1,0 +1,70 @@
+name: Bug Report
+description: Report something that isn't working correctly
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Briefly describe the issue
+      placeholder: What happened? What's broken?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: How to reproduce the issue
+      placeholder: "1.\n2.\n3."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should have happened
+      placeholder: 
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened
+      placeholder: 
+
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      description: (e.g., Windows 11, macOS Sonoma, Ubuntu 24.04)
+
+  - type: input
+    id: version
+    attributes:
+      label: App Version
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots / Recordings
+      description: Add screenshots or recordings if applicable
+
+  - type: checkboxes
+    id: area
+    attributes:
+      label: Component / Area
+      options:
+        - label: Frontend (React/UI)
+        - label: Backend (Rust)
+        - label: Terminal / PTY
+        - label: API integrations
+        - label: Build / Dev experience
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any other context (browser console errors, logs, etc.)

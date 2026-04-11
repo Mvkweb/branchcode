@@ -1,0 +1,37 @@
+name: Feature Request
+description: Suggest a new feature or improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What would you like to add or change?
+      placeholder: Describe your feature idea
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why is this needed?
+      description: What problem does it solve or what value does it add?
+      placeholder: 
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Mockups, examples, links to similar features, etc.
+
+  - type: checkboxes
+    id: testing
+    attributes:
+      label: Testing Help
+      description: "Are you able to help test this feature? If so, on which OS(s)?"
+      options:
+        - label: Windows
+        - label: Linux
+        - label: macOS
+        - label: "I can't test, but want to follow the feature"

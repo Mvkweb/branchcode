@@ -1,0 +1,60 @@
+name: Pull Request
+description: Submit changes to the project
+title: ""
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Brief description of what this PR does
+      placeholder: 
+
+  - type: checkboxes
+    id: type
+    attributes:
+      label: Type of Change
+      options:
+        - label: Bug fix
+        - label: New feature
+        - label: Refactoring
+        - label: Performance improvement
+        - label: QoL improvement
+        - label: Documentation update
+
+  - type: checkboxes
+    id: area
+    attributes:
+      label: Component / Area
+      options:
+        - label: Frontend (React/UI)
+        - label: Backend (Rust)
+        - label: Terminal / PTY
+        - label: API integrations
+        - label: Build / Dev experience
+
+  - type: textarea
+    id: testing
+    attributes:
+      label: Testing
+      description: How was this tested?
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots / Recordings
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: My code follows the project's coding style
+        - label: I have performed a self-review of my own code
+        - label: I have commented my code where necessary
+        - label: I have updated the documentation if needed
+        - label: My changes generate no new warnings
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
