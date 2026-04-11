@@ -40,6 +40,4 @@ labels: ["bug"]
 - [ ] Build / Dev experience
 - [ ] Other:
 
-
 ## Additional Context
-
