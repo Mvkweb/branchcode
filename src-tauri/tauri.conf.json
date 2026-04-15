@@ -39,5 +39,13 @@
       "icons/icon.ico"
     ]
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDczNzM3OEJFMjY1NjY1OApSV1JZWm1YaWl6YzNCMGEvamJNZms4bkZZRGNMSEtYRDE4ZVNSQ3pqR3NyTEh5QnNOVXkyYk9tdAo=",
+      "endpoints": ["https://branchcode.mvktest.workers.dev/"],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
 }

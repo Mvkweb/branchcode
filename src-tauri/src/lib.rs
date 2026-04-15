@@ -2,6 +2,7 @@ mod opencode_client;
 mod server;
 mod git;
 mod pty;
+mod updater;
 
 use opencode_client::OcStreamEvent;
 use pty::PtyState;
@@ -318,6 +319,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state.pty.clone())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
@@ -351,6 +353,8 @@ pub fn run() {
             pty::resize_terminal,
             pty::close_terminal,
             pty::is_terminal_alive,
+            updater::check_updates,
+            updater::download_and_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

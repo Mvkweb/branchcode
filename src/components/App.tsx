@@ -28,6 +28,7 @@ import { useSessions } from '../hooks/useSessions';
 import { useFileTree } from '../hooks/useFileTree';
 import { useGit } from '../hooks/useGit';
 import { SettingsModal } from './Settings';
+import UpdateModal from './UpdateModal';
 import { ChatMessages, MessagePlaceholder } from './ChatMessages';
 import { GitPanel } from './GitPanel';
 import { TerminalPanel } from './TerminalPanel';
@@ -667,6 +668,7 @@ export default function App() {
 
   const [elapsed, setElapsed] = useState(0);
   const[showSettings, setShowSettings] = useState(false);
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [appMode, setAppMode] = useState<'plan' | 'build'>('build');
 
   const isVisible = isPinned || isHovered;
@@ -853,6 +855,7 @@ export default function App() {
     <div className="h-screen w-screen flex bg-[#0a0a0a] font-sans text-white overflow-hidden relative">
       <AnimatePresence>
         {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+        {showUpdateModal && <UpdateModal isOpen={showUpdateModal} onClose={() => setShowUpdateModal(false)} />}
       </AnimatePresence>
       
       {/* Window Controls */}
@@ -996,11 +999,14 @@ export default function App() {
             </div>
           )}
           <div className="flex items-center justify-between text-xs text-neutral-500">
-            <button className="flex items-center gap-2 hover:text-neutral-300 transition-colors">
+            <button 
+              onClick={() => setShowUpdateModal(true)}
+              className="flex items-center gap-2 hover:text-neutral-300 transition-colors"
+            >
               <div className="w-2 h-2 rounded-full bg-neutral-600" />
-              What's new
+              Updates
             </button>
-            <span className="text-neutral-600">v0.1.50</span>
+            <span className="text-neutral-600">v0.1.0</span>
           </div>
           <div className="flex items-center justify-between">
             <div 
