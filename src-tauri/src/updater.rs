@@ -13,11 +13,45 @@ pub struct CommitUpdate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseAsset {
+    pub name: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReleaseUpdate {
     pub version: String,
     pub message: String,
     pub date: String,
-    pub url: Option<String>,
+    pub assets: Vec<ReleaseAsset>,
+}
+
+impl ReleaseUpdate {
+    /// Get the best download URL for the current platform
+    pub fn get_url(&self) -> Option<&String> {
+        #[cfg(target_os = "windows")]
+        {
+            // Try NSIS installer first, then MSI
+            self.assets
+                .iter()
+                .find(|a| a.name.contains(".exe") || a.name.contains("nsis"))
+                .map(|a| &a.url)
+                .or_else(|| self.assets.first().map(|a| &a.url))
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // Try AppImage or deb or rpm
+            self.assets
+                .iter()
+                .find(|a| a.name.contains(".AppImage") || a.name.contains(".deb") || a.name.contains(".rpm"))
+                .map(|a| &a.url)
+                .or_else(|| self.assets.first().map(|a| &a.url))
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        {
+            self.assets.first().map(|a| &a.url)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +102,12 @@ pub async fn check_updates() -> Result<Option<UpdateResponse>, String> {
     );
 
     Ok(Some(data))
+}
+
+/// Get the best download URL for the current platform from a release
+#[tauri::command]
+pub fn get_release_url(release: ReleaseUpdate) -> Option<String> {
+    release.get_url().cloned()
 }
 
 #[tauri::command]

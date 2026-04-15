@@ -46,6 +46,7 @@ export default {
       }));
 
     // Format releases - separate prerelease and stable
+    // Return ALL assets, the updater will pick the right one for the user's OS
     const prerelease = releasesData
       .filter(r => r.prerelease)
       .slice(0, 5)
@@ -53,7 +54,10 @@ export default {
         version: r.tag_name,
         message: r.body?.split('\n')[0] || "",
         date: r.published_at,
-        url: r.assets?.[0]?.browser_download_url
+        assets: r.assets?.map(a => ({
+          name: a.name,
+          url: a.browser_download_url
+        })) || []
       }));
 
     const stable = releasesData
@@ -63,7 +67,10 @@ export default {
         version: r.tag_name,
         message: r.body?.split('\n')[0] || "",
         date: r.published_at,
-        url: r.assets?.[0]?.browser_download_url
+        assets: r.assets?.map(a => ({
+          name: a.name,
+          url: a.browser_download_url
+        })) || []
       }));
 
     response = new Response(JSON.stringify({

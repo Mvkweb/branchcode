@@ -11,11 +11,16 @@ export interface CommitUpdate {
   url: string;
 }
 
+export interface ReleaseAsset {
+  name: string;
+  url: string;
+}
+
 export interface ReleaseUpdate {
   version: string;
   message: string;
   date: string;
-  url: string | null;
+  assets: ReleaseAsset[];
 }
 
 export interface UpdateChannels {

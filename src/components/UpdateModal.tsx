@@ -65,10 +65,21 @@ export default function UpdateModal({ isOpen, onClose, currentVersion }: Props) 
     }
   }, [selectedType]);
 
-  async function onInstall(url: string | null | undefined, key: string) {
-    if (!url) return;
+  async function onInstall(item: any, key: string) {
     try {
       setInstallingKey(key);
+      
+      // For releases, ask the backend for the best URL for this platform
+      let url: string | null = null;
+      if (item.assets && item.assets.length > 0) {
+        url = await invoke<string | null>("get_release_url", { release: item });
+      }
+      
+      if (!url) {
+        console.error("No download URL available");
+        return;
+      }
+      
       await invoke<string>("download_and_install", { url });
     } catch (e) {
       console.error(e);
@@ -193,7 +204,6 @@ export default function UpdateModal({ isOpen, onClose, currentVersion }: Props) 
                       const isCommit = selectedType === "commit";
                       const key = isCommit ? (item as CommitUpdate).fullSha : (item as ReleaseUpdate).version;
                       const idOrVersion = isCommit ? (item as CommitUpdate).id : (item as ReleaseUpdate).version;
-                      const url = (item as any).url as string | null | undefined;
 
                       return (
                         <div key={key ?? idx} className="flex items-start justify-between group">
@@ -217,8 +227,8 @@ export default function UpdateModal({ isOpen, onClose, currentVersion }: Props) 
                           </div>
 
                           <button
-                            onClick={() => onInstall(url, String(key ?? idx))}
-                            disabled={!url || installingKey === String(key ?? idx)}
+                            onClick={() => onInstall(item, String(key ?? idx))}
+                            disabled={installingKey === String(key ?? idx)}
                             className="flex items-center space-x-1 px-3 py-1.5 text-[12px] font-medium text-white bg-green-600 hover:bg-green-500 rounded-md transition-colors shrink-0 disabled:opacity-50 disabled:hover:bg-green-600"
                           >
                             <ArrowDown className="w-3 h-3" />

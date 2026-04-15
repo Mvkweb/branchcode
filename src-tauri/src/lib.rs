@@ -355,6 +355,7 @@ pub fn run() {
             pty::is_terminal_alive,
             updater::check_updates,
             updater::download_and_install,
+            updater::get_release_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
