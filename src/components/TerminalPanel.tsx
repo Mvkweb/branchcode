@@ -58,6 +58,17 @@ export function TerminalPanel({ onClose, isOpen }: { onClose?: () => void; isOpe
   const { terminals, activeTerminalId, createTerminal, closeTerminal, setActiveTerminal } = useTerminal();
 
   useEffect(() => {
+    const handleSshTerminal = (e: Event) => {
+      const customEvent = e as CustomEvent<{ configId: string, serverName: string }>;
+      const { configId, serverName } = customEvent.detail;
+      createTerminal({ type: 'ssh', configId, serverName });
+    };
+
+    window.addEventListener('spawn-ssh-terminal', handleSshTerminal);
+    return () => window.removeEventListener('spawn-ssh-terminal', handleSshTerminal);
+  }, [createTerminal]);
+
+  useEffect(() => {
     if (isOpen && terminals.length === 0) {
       createTerminal();
     }
@@ -84,7 +95,7 @@ export function TerminalPanel({ onClose, isOpen }: { onClose?: () => void; isOpe
                 }`}
               >
                 <TerminalIcon size={12} />
-                <span className="text-xs font-mono">{t.id}</span>
+                <span className="text-xs font-mono">{t.label || t.id}</span>
                 <button
                   onClick={(e) => { e.stopPropagation(); handleClose(t.id); }}
                   className={`p-0.5 rounded hover:bg-white/10 ${isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}

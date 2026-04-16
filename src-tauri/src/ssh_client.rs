@@ -574,7 +574,11 @@ pub async fn ssh_connect(
     state: State<'_, SshState>,
 ) -> Result<SshConnectionInfo, String> {
     let mut mgr = state.lock().await;
-    mgr.connect(&config_id).await.map_err(|e| e.to_string())
+    mgr.connect(&config_id).await.map_err(|e| {
+        let err_msg = format!("{:#}", e);
+        eprintln!("[SSH ERROR] Connection failed: {}", err_msg);
+        err_msg
+    })
 }
 
 #[tauri::command]

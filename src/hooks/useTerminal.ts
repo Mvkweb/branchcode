@@ -5,6 +5,7 @@ import { init, Terminal, FitAddon } from 'ghostty-web';
 
 export interface TerminalInstance {
   id: string;
+  label: string;
   terminal: Terminal;
   container: HTMLDivElement;
   fitAddon: FitAddon;
@@ -24,7 +25,11 @@ export function useTerminal() {
 
   const closeTerminal = useCallback(async (id: string) => {
     try {
-      await invoke('close_terminal', { id });
+      if (id.startsWith('ssh-shell-')) {
+        await invoke('ssh_close_shell', { shellId: id });
+      } else {
+        await invoke('close_terminal', { id });
+      }
     } catch {}
 
     const term = terminalsRef.current.find(t => t.id === id);
@@ -49,25 +54,34 @@ export function useTerminal() {
     isInitializedRef.current = true;
     await init();
 
-    const unData = listen<{id: string, data: number[]}>('pty:data', e => {
+    const handleData = (e: { payload: { id: string, data: number[] } }) => {
       const t = terminalsRef.current.find(term => term.id === e.payload.id);
       if (!t) return;
       const dec = new TextDecoder('utf-8', { fatal: false });
       const text = dec.decode(new Uint8Array(e.payload.data), { stream: true });
       if (text) t.terminal.write(text);
-    });
+    };
 
-    const unExit = listen<{id: string}>('pty:exit', e => {
+    const handleExit = (e: { payload: { id: string } }) => {
       closeTerminalRef.current(e.payload.id);
-    });
+    };
+
+    const unData = listen<{id: string, data: number[]}>('pty:data', handleData);
+    const unExit = listen<{id: string}>('pty:exit', handleExit);
+    
+    // Listen for SSH terminal events
+    const unDataSSH = listen<{id: string, data: number[]}>('ssh:data', handleData);
+    const unExitSSH = listen<{id: string}>('ssh:exit', handleExit);
 
     return () => {
       unData.then(f => f());
       unExit.then(f => f());
+      unDataSSH.then(f => f());
+      unExitSSH.then(f => f());
     };
   }, []);
 
-  const createTerminal = useCallback(async () => {
+  const createTerminal = useCallback(async (opts?: { type: 'local' } | { type: 'ssh', configId: string, serverName: string }) => {
     await initTerminal();
 
     const container = document.createElement('div');
@@ -89,14 +103,27 @@ export function useTerminal() {
     term.open(container);
     fitAddon.fit();
 
-    const id = await invoke<string>('spawn_terminal');
+    const type = opts?.type || 'local';
+    let id: string;
+    let label: string;
 
-    term.onData((data: string) => {
-      invoke('write_terminal', { id, data }).catch(() => {});
-    });
+    if (type === 'local') {
+      label = 'Local';
+      id = await invoke<string>('spawn_terminal');
+      term.onData((data: string) => {
+        invoke('write_terminal', { id, data }).catch(() => {});
+      });
+    } else {
+      label = `SSH: ${opts.serverName}`;
+      id = await invoke<string>('ssh_spawn_shell', { configId: opts.configId });
+      term.onData((data: string) => {
+        invoke('ssh_write_shell', { shellId: id, data }).catch(() => {});
+      });
+    }
 
     const newInstance: TerminalInstance = {
       id,
+      label,
       terminal: term,
       container,
       fitAddon,

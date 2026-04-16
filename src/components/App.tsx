@@ -22,10 +22,13 @@ import {
   Square,
   Star,
   Search,
+  Server,
+  Globe,
 } from 'lucide-react';
 import { useChat } from '../hooks/useChat';
 import { useSessions } from '../hooks/useSessions';
 import { useFileTree } from '../hooks/useFileTree';
+import { useRemoteFileTree } from '../hooks/useRemoteFileTree';
 import { useGit } from '../hooks/useGit';
 import { useSsh } from '../hooks/useSsh';
 import { SettingsModal } from './Settings';
@@ -274,6 +277,51 @@ function SidebarItem({
           <Trash2 size={12} />
         </button>
       )}
+    </div>
+  );
+}
+
+function ProjectFolder({ 
+  name, 
+  icon, 
+  children, 
+  defaultOpen = false 
+}: { 
+  name: string; 
+  icon: React.ReactNode; 
+  children: React.ReactNode; 
+  defaultOpen?: boolean; 
+}) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+  return (
+    <div className="mb-1">
+      <button 
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full flex items-center justify-between px-2 py-1.5 text-sm text-neutral-400 hover:text-neutral-200 transition-colors group rounded-lg hover:bg-[#1a1a1a]"
+      >
+        <div className="flex items-center gap-2 overflow-hidden truncate">
+          <div className="flex items-center justify-center w-4 h-4 text-neutral-500 group-hover:text-neutral-300">
+            {icon}
+          </div>
+          <span className="flex-1 text-left truncate font-medium">{name}</span>
+        </div>
+        <ChevronDown size={12} className={`transition-transform duration-200 text-neutral-500 ${isOpen ? '' : '-rotate-90'}`} />
+      </button>
+      <AnimatePresence initial={false}>
+        {isOpen && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <div className="pl-6 pr-1 py-1 space-y-0.5">
+              {children}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -685,6 +733,7 @@ export default function App() {
   const { sessions, activeSessionId, createSession, deleteSession, selectSession } =
     useSessions();
   const { files, loadDirectory } = useFileTree();
+  const remoteFileTree = useRemoteFileTree();
   const git = useGit(true, 5000);
   const [contextLimit, setContextLimit] = useState(200000);
 
@@ -744,6 +793,13 @@ export default function App() {
   useEffect(() => {
     if (config?.project_dir) loadDirectory(config.project_dir);
   }, [config?.project_dir, loadDirectory]);
+
+  useEffect(() => {
+    // If we have an active remote connection, default to listing `.`
+    if (ssh.activeConnectionId) {
+      remoteFileTree.loadDirectory(ssh.activeConnectionId, '.');
+    }
+  }, [ssh.activeConnectionId, remoteFileTree.loadDirectory]);
 
   useEffect(() => {
     if (!activeSessionId) return;
@@ -933,28 +989,55 @@ export default function App() {
         <div className="flex-1 overflow-y-auto custom-scrollbar mt-4">
           <div className="px-4 mb-6">
             <div className="flex items-center justify-between text-[11px] font-semibold text-neutral-500 mb-2 tracking-wider">
-              CHATS
+              THREADS
               <button
                 onClick={handleNewChat}
                 className="hover:text-neutral-300 transition-colors"
+                title="New Thread"
               >
                 <FolderPlus size={14} />
               </button>
             </div>
-            <div className="space-y-0.5">
-              {sessions.map((session) => (
-                <SidebarItem
-                  key={session.id}
-                  icon={<Folder size={14} />}
-                  label={session.title || 'Untitled'}
-                  active={session.id === activeSessionId}
-                  onClick={() => selectSession(session.id)}
-                  onDelete={() => deleteSession(session.id)}
-                />
+            <div className="space-y-1">
+              {/* Local Workspace Project */}
+              <ProjectFolder 
+                name={config?.project_dir ? config.project_dir.split('\\').pop() || 'Local Workspace' : 'Local Workspace'} 
+                icon={<Folder size={14} />} 
+                defaultOpen={true}
+              >
+                {sessions.map((session) => (
+                  <SidebarItem
+                    key={session.id}
+                    label={session.title || 'Untitled'}
+                    active={session.id === activeSessionId}
+                    onClick={() => selectSession(session.id)}
+                    onDelete={() => deleteSession(session.id)}
+                  />
+                ))}
+                {sessions.length === 0 && (
+                  <div className="text-[12px] text-neutral-600 px-2 py-1">No threads yet</div>
+                )}
+              </ProjectFolder>
+
+              {/* Remote SSH Projects */}
+              {ssh.servers.map((server) => (
+                <ProjectFolder 
+                  key={server.id} 
+                  name={server.name} 
+                  icon={
+                    <div className="relative">
+                      <Server size={14} className="text-teal-500" />
+                      {ssh.connections[server.id] && (
+                        <div className="absolute -bottom-0.5 -right-0.5 w-[6px] h-[6px] bg-teal-400 rounded-full border border-[#0f0f0f]" />
+                      )}
+                    </div>
+                  }
+                >
+                  <div className="text-[12px] text-neutral-600 px-2 py-1">
+                    {ssh.connections[server.id] ? 'No remote threads' : 'Not connected'}
+                  </div>
+                </ProjectFolder>
               ))}
-              {sessions.length === 0 && (
-                <div className="text-[12px] text-neutral-600 px-2 py-1">No chats yet</div>
-              )}
             </div>
           </div>
 
@@ -973,21 +1056,62 @@ export default function App() {
               />
             </button>
             {showFileTree && (
-              <div className="space-y-0.5">
-                {Object.entries(files).map(([name, info]) => {
-                  const entry = info as Record<string, unknown>;
-                  const isDir = entry.type === 'directory';
-                  return (
-                    <SidebarItem
-                      key={name}
-                      icon={isDir ? <Folder size={14} /> : <FileText size={14} />}
-                      label={name}
-                      onClick={() => {
-                        if (isDir && entry.path) loadDirectory(entry.path as string);
-                      }}
-                    />
-                  );
-                })}
+              <div className="space-y-4 mt-2">
+                {/* Local Files */}
+                <div className="space-y-0.5">
+                  <div className="text-[10px] font-semibold text-neutral-600 mb-1 px-2 uppercase tracking-wider">
+                    {config?.project_dir ? config.project_dir.split('\\').pop() : 'Local'}
+                  </div>
+                  {Object.entries(files).map(([name, info]) => {
+                    const entry = info as Record<string, unknown>;
+                    const isDir = entry.type === 'directory';
+                    return (
+                      <SidebarItem
+                        key={`local-${name}`}
+                        icon={isDir ? <Folder size={14} /> : <FileText size={14} />}
+                        label={name}
+                        onClick={() => {
+                          if (isDir && entry.path) loadDirectory(entry.path as string);
+                        }}
+                      />
+                    );
+                  })}
+                  {Object.keys(files).length === 0 && (
+                    <div className="text-[12px] text-neutral-600 px-2">No local files</div>
+                  )}
+                </div>
+
+                {/* Remote Files */}
+                {ssh.activeConnectionId && (
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-2 text-[10px] font-semibold text-teal-600/80 mb-1 px-2 uppercase tracking-wider">
+                      <Globe size={10} className="text-teal-500" />
+                      {ssh.activeConnection?.server_name || 'Remote'}
+                    </div>
+                    {remoteFileTree.loading && remoteFileTree.files.length === 0 ? (
+                      <div className="flex items-center gap-2 px-2 py-1 text-[12px] text-neutral-500">
+                        <div className="w-3 h-3 border-2 border-teal-500/20 border-t-teal-500 rounded-full animate-spin" />
+                        Loading...
+                      </div>
+                    ) : (
+                      remoteFileTree.files.map((file) => (
+                        <SidebarItem
+                          key={`remote-${file.path}`}
+                          icon={file.is_dir ? <Folder size={14} className="text-teal-500" /> : <FileText size={14} className="text-teal-500/80" />}
+                          label={file.name}
+                          onClick={() => {
+                            if (file.is_dir && ssh.activeConnectionId) {
+                              remoteFileTree.loadDirectory(ssh.activeConnectionId, file.path);
+                            }
+                          }}
+                        />
+                      ))
+                    )}
+                    {!remoteFileTree.loading && remoteFileTree.files.length === 0 && (
+                      <div className="text-[12px] text-neutral-600 px-2">No remote files</div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1334,6 +1458,12 @@ export default function App() {
               onSshDeleteServer={ssh.deleteServer}
               onSshConnect={ssh.connect}
               onSshDisconnect={ssh.disconnect}
+              onSpawnTerminal={(configId, serverName) => {
+                setShowTerminal(true);
+                window.dispatchEvent(new CustomEvent('spawn-ssh-terminal', { 
+                  detail: { configId, serverName } 
+                }));
+              }}
             />
           </motion.div>
         )}

@@ -31,7 +31,10 @@ import {
   TerminalSquare,
   Wifi,
   WifiOff,
+  FolderOpen,
 } from 'lucide-react';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { homeDir, join } from '@tauri-apps/api/path';
 import type { GitStatus, GitFile, GitBranch as GitBranchType, SshServerConfig, SshConnectionInfo, SshAuthMethod } from '../lib/tauri';
 import { DiffViewer } from './DiffViewer';
 
@@ -341,10 +344,10 @@ function SshServerForm({
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: 4 }}
-      transition={{ duration: 0.18 }}
+      initial={{ opacity: 0, scale: 0.96, y: 12 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.96, y: 12 }}
+      transition={{ duration: 0.25, ease: [0.23, 1, 0.32, 1] }}
       className="p-4 space-y-3"
     >
       <div className="flex items-center justify-between mb-1">
@@ -368,7 +371,10 @@ function SshServerForm({
           </div>
           <div className="w-[72px]">
             <label className="text-[11px] text-neutral-500 mb-1 block">Port</label>
-            <input className={inputCx} type="number" value={port} onChange={e => setPort(Number(e.target.value))} />
+            <input className={inputCx} type="text" pattern="[0-9]*" value={port} onChange={e => {
+                const raw = e.target.value.replace(/\D/g, '');
+                setPort(raw ? Number(raw) : 22);
+            }} />
           </div>
         </div>
         <div>
@@ -382,19 +388,33 @@ function SshServerForm({
           <div className="flex p-[2px] bg-[#111] rounded-[6px] border border-white/[0.04]">
             <button
               onClick={() => setAuthType('key')}
-              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[11px] font-medium rounded-[4px] transition-colors ${
-                authType === 'key' ? 'text-neutral-100 bg-[#222] border border-white/[0.04]' : 'text-neutral-500 hover:text-neutral-300'
+              className={`relative flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[11px] font-medium rounded-[4px] transition-colors ${
+                authType === 'key' ? 'text-neutral-100' : 'text-neutral-500 hover:text-neutral-300'
               }`}
             >
-              <Key size={11} /> SSH Key
+              {authType === 'key' && (
+                <motion.div
+                  layoutId="sshAuthTab"
+                  className="absolute inset-0 bg-[#222] border border-white/[0.04] rounded-[4px]"
+                  transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                />
+              )}
+              <span className="relative z-10 flex items-center gap-1.5"><Key size={11} /> SSH Key</span>
             </button>
             <button
               onClick={() => setAuthType('password')}
-              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[11px] font-medium rounded-[4px] transition-colors ${
-                authType === 'password' ? 'text-neutral-100 bg-[#222] border border-white/[0.04]' : 'text-neutral-500 hover:text-neutral-300'
+              className={`relative flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[11px] font-medium rounded-[4px] transition-colors ${
+                authType === 'password' ? 'text-neutral-100' : 'text-neutral-500 hover:text-neutral-300'
               }`}
             >
-              <Lock size={11} /> Password
+              {authType === 'password' && (
+                <motion.div
+                  layoutId="sshAuthTab"
+                  className="absolute inset-0 bg-[#222] border border-white/[0.04] rounded-[4px]"
+                  transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                />
+              )}
+              <span className="relative z-10 flex items-center gap-1.5"><Lock size={11} /> Password</span>
             </button>
           </div>
         </div>
@@ -408,7 +428,33 @@ function SshServerForm({
           <>
             <div>
               <label className="text-[11px] text-neutral-500 mb-1 block">Key Path</label>
-              <input className={inputCx} value={keyPath} onChange={e => setKeyPath(e.target.value)} placeholder="~/.ssh/id_rsa" />
+              <div className="flex gap-1.5 items-center">
+                <input className={inputCx} value={keyPath} onChange={e => setKeyPath(e.target.value)} placeholder="~/.ssh/id_rsa" />
+                <button
+                  type="button"
+                  onClick={async (e) => {
+                     e.preventDefault();
+                     let defaultExpandedPath: string | undefined;
+                     try {
+                       const home = await homeDir();
+                       defaultExpandedPath = await join(home, '.ssh');
+                     } catch (e) {
+                       console.error("Failed to get default SSH path", e);
+                     }
+                     const selected = await openDialog({
+                       multiple: false,
+                       title: 'Select SSH Private Key',
+                       defaultPath: defaultExpandedPath
+                     });
+                     if (selected && typeof selected === 'string') {
+                       setKeyPath(selected);
+                     }
+                  }}
+                  className="p-1.5 bg-[#141414] hover:bg-[#1a1a1a] border border-white/[0.06] rounded-[6px] text-neutral-400 hover:text-neutral-200 transition-colors"
+                >
+                  <FolderOpen size={14} />
+                </button>
+              </div>
             </div>
             <div>
               <label className="text-[11px] text-neutral-500 mb-1 block">Passphrase <span className="text-neutral-600">(optional)</span></label>
@@ -433,7 +479,7 @@ function SshServerForm({
         <button
           onClick={handleSave}
           disabled={!isValid}
-          className="flex-1 px-3 py-1.5 bg-teal-500/15 hover:bg-teal-500/25 border border-teal-500/25 rounded-[6px] text-[12px] font-medium text-teal-300 hover:text-teal-200 transition-all disabled:opacity-40 disabled:pointer-events-none"
+          className="flex-1 px-3 py-1.5 bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/25 rounded-[6px] text-[12px] font-medium text-blue-400 hover:text-blue-300 transition-all disabled:opacity-40 disabled:pointer-events-none"
         >
           {initial ? 'Save' : 'Save & Connect'}
         </button>
@@ -472,18 +518,18 @@ function SshServerCard({
       transition={{ duration: 0.16 }}
       className={`mx-3 mb-2 rounded-[8px] border transition-colors ${
         isConnected
-          ? 'border-teal-500/20 bg-teal-500/[0.04]'
+          ? 'border-blue-500/20 bg-blue-500/[0.04]'
           : 'border-white/[0.05] bg-white/[0.015] hover:bg-white/[0.03]'
       }`}
     >
       <div className="flex items-center gap-3 px-3 py-2.5">
         <div className={`relative flex items-center justify-center w-8 h-8 rounded-lg ${
-          isConnected ? 'bg-teal-500/15 text-teal-400' : 'bg-white/[0.04] text-neutral-500'
+          isConnected ? 'bg-blue-500/15 text-blue-400' : 'bg-white/[0.04] text-neutral-500'
         }`}>
           <MonitorSmartphone size={16} />
           {isConnected && (
             <span className="absolute -bottom-0.5 -right-0.5 flex h-[9px] w-[9px] items-center justify-center rounded-full bg-[#0a0a0a]">
-              <span className="h-[6px] w-[6px] rounded-full bg-teal-400 animate-pulse" />
+              <span className="h-[6px] w-[6px] rounded-full bg-blue-400 animate-pulse" />
             </span>
           )}
         </div>
@@ -492,7 +538,7 @@ function SshServerCard({
           <div className="flex items-center gap-2">
             <span className="text-[12.5px] font-medium text-neutral-200 truncate">{config.name}</span>
             {isConnected && (
-              <span className="text-[9px] font-semibold tracking-wider px-1.5 py-[1px] rounded-full bg-teal-500/15 text-teal-400 border border-teal-500/20 uppercase">
+              <span className="text-[9px] font-semibold tracking-wider px-1.5 py-[1px] rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/20 uppercase">
                 live
               </span>
             )}
@@ -508,7 +554,7 @@ function SshServerCard({
           <>
             <button
               onClick={onTerminal}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-[5px] text-[11px] font-medium text-teal-300/80 hover:text-teal-200 hover:bg-teal-500/10 transition-colors"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-[5px] text-[11px] font-medium text-blue-300/80 hover:text-blue-200 hover:bg-blue-500/10 transition-colors"
             >
               <TerminalSquare size={12} /> Terminal
             </button>
@@ -524,7 +570,7 @@ function SshServerCard({
             <button
               onClick={onConnect}
               disabled={isConnecting}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-[5px] text-[11px] font-medium text-teal-400/70 hover:text-teal-300 hover:bg-teal-500/10 transition-colors disabled:opacity-40"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-[5px] text-[11px] font-medium text-blue-400/70 hover:text-blue-300 hover:bg-blue-500/10 transition-colors disabled:opacity-40"
             >
               {isConnecting ? <Loader2 size={12} className="animate-spin" /> : <Wifi size={12} />}
               {isConnecting ? 'Connecting...' : 'Connect'}
@@ -591,10 +637,10 @@ function SshPanel({
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-3 border-b border-white/[0.04]">
         <div className="flex items-center gap-2">
-          <Server size={14} className="text-teal-400/60" />
+          <Server size={14} className="text-blue-400/60" />
           <span className="text-[12.5px] font-medium text-neutral-300 tracking-wide">Remote Servers</span>
           {connections.length > 0 && (
-            <span className="text-[10px] font-mono text-teal-400/70 bg-teal-500/10 px-1.5 py-[1px] rounded-full">
+            <span className="text-[10px] font-mono text-blue-400/70 bg-blue-500/10 px-1.5 py-[1px] rounded-full">
               {connections.length} active
             </span>
           )}
@@ -603,7 +649,7 @@ function SshPanel({
           onClick={() => { setShowForm(!showForm); setEditingServer(undefined); }}
           className={`p-1 rounded-[5px] transition-all ${
             showForm
-              ? 'text-teal-400 bg-teal-500/15 rotate-45'
+              ? 'text-blue-400 bg-blue-500/15 rotate-45'
               : 'text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.06]'
           }`}
         >
