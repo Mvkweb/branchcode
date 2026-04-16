@@ -22,11 +22,22 @@ function TerminalView({ term, active }: { term: TerminalInstance; active: boolea
       if (!ref.current || ref.current.clientWidth === 0) return;
       try {
         term.fitAddon.fit();
-        invoke('resize_terminal', {
-          id: term.id,
-          cols: term.terminal.cols,
-          rows: term.terminal.rows,
-        }).catch(() => {});
+        const cols = term.terminal.cols;
+        const rows = term.terminal.rows;
+
+        if (term.id.startsWith('ssh-shell-')) {
+          invoke('ssh_resize_shell', { 
+            shellId: term.id, 
+            cols, 
+            rows 
+          }).catch(() => {});
+        } else {
+          invoke('resize_terminal', {
+            id: term.id,
+            cols,
+            rows,
+          }).catch(() => {});
+        }
       } catch {}
     };
 

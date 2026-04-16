@@ -378,6 +378,7 @@ pub fn run() {
             ssh_client::ssh_list_dir,
             ssh_client::ssh_read_file,
             ssh_client::ssh_write_file,
+            ssh_client::ssh_resize_shell,
             ssh_client::ssh_spawn_shell,
             ssh_client::ssh_write_shell,
             ssh_client::ssh_close_shell,

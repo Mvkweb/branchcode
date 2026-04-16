@@ -1458,7 +1458,7 @@ export default function App() {
               onSshDeleteServer={ssh.deleteServer}
               onSshConnect={ssh.connect}
               onSshDisconnect={ssh.disconnect}
-              onSpawnTerminal={(configId, serverName) => {
+              onSshSpawnTerminal={(configId, serverName) => {
                 setShowTerminal(true);
                 window.dispatchEvent(new CustomEvent('spawn-ssh-terminal', { 
                   detail: { configId, serverName } 

@@ -96,10 +96,18 @@ struct SshConnection {
     remote_opencode_port: Option<u16>,
 }
 
+// ── Shell commands sent from the main thread to the reader task ───────────────
+
+enum ShellCmd {
+    Write(Vec<u8>),
+    Resize(u32, u32),
+    Close,
+}
+
 // ── Shell handle ──────────────────────────────────────────────────────────────
 
 struct SshShellHandle {
-    channel_id: ChannelId,
+    cmd_tx: tokio::sync::mpsc::UnboundedSender<ShellCmd>,
     conn_id: String,
 }
 
@@ -253,6 +261,17 @@ impl SshManager {
     }
 
     pub async fn disconnect(&mut self, config_id: &str) -> Result<()> {
+        // Send Close to any shells on this connection
+        let shell_ids: Vec<String> = self.shells.iter()
+            .filter(|(_, s)| s.conn_id == config_id)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &shell_ids {
+            if let Some(shell) = self.shells.get(id) {
+                let _ = shell.cmd_tx.send(ShellCmd::Close);
+            }
+        }
+
         if let Some(conn) = self.connections.remove(config_id) {
             println!("[SSH] Disconnecting from {}", conn.server_name);
             conn.handle
@@ -389,30 +408,61 @@ impl SshManager {
         let shell_id = format!("ssh-shell-{}", self.next_shell_id);
         self.next_shell_id += 1;
 
+        // Create the command channel for write/resize/close
+        let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel::<ShellCmd>();
+
         let shell_handle = SshShellHandle {
-            channel_id: channel.id(),
+            cmd_tx,
             conn_id: config_id.to_string(),
         };
         self.shells.insert(shell_id.clone(), shell_handle);
 
-        // Spawn reader thread for shell output
+        // Spawn the shell task — owns the Channel exclusively
         let read_id = shell_id.clone();
         tokio::spawn(async move {
-            let mut stream = channel.into_stream();
-            let mut buf = [0u8; 8192];
+            let mut channel = channel;
             loop {
-                match stream.read(&mut buf).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let _ = app.emit(
-                            "ssh:data",
-                            SshShellData {
-                                id: read_id.clone(),
-                                data: buf[..n].to_vec(),
-                            },
-                        );
+                tokio::select! {
+                    // Incoming data from remote
+                    msg = channel.wait() => {
+                        match msg {
+                            Some(ChannelMsg::Data { ref data }) => {
+                                let _ = app.emit(
+                                    "ssh:data",
+                                    SshShellData {
+                                        id: read_id.clone(),
+                                        data: data.to_vec(),
+                                    },
+                                );
+                            }
+                            Some(ChannelMsg::ExtendedData { ref data, .. }) => {
+                                let _ = app.emit(
+                                    "ssh:data",
+                                    SshShellData {
+                                        id: read_id.clone(),
+                                        data: data.to_vec(),
+                                    },
+                                );
+                            }
+                            Some(ChannelMsg::Eof) | None => break,
+                            _ => {}
+                        }
                     }
-                    Err(_) => break,
+                    // Commands from the main thread (write, resize, close)
+                    cmd = cmd_rx.recv() => {
+                        match cmd {
+                            Some(ShellCmd::Write(data)) => {
+                                let _ = channel.data(&data[..]).await;
+                            }
+                            Some(ShellCmd::Resize(cols, rows)) => {
+                                let _ = channel.window_change(cols, rows, 0, 0).await;
+                            }
+                            Some(ShellCmd::Close) | None => {
+                                let _ = channel.eof().await;
+                                break;
+                            }
+                        }
+                    }
                 }
             }
             let _ = app.emit("ssh:exit", SshShellExit { id: read_id });
@@ -421,24 +471,32 @@ impl SshManager {
         Ok(shell_id)
     }
 
-    pub async fn write_shell(&mut self, shell_id: &str, data: &[u8]) -> Result<()> {
+    pub fn write_shell(&self, shell_id: &str, data: &[u8]) -> Result<()> {
         let shell = self
             .shells
             .get(shell_id)
             .ok_or_else(|| anyhow!("Shell not found: {}", shell_id))?;
 
-        let conn = self
-            .connections
-            .get_mut(&shell.conn_id)
-            .ok_or_else(|| anyhow!("Connection not found for shell"))?;
+        shell.cmd_tx.send(ShellCmd::Write(data.to_vec()))
+            .map_err(|_| anyhow!("Shell task has exited"))?;
+        Ok(())
+    }
 
-        conn.handle.data(shell.channel_id, CryptoVec::from(data.to_vec())).await
-            .map_err(|e| anyhow!("Failed to write to shell: {:?}", e))?;
+    pub fn resize_shell(&self, shell_id: &str, cols: u32, rows: u32) -> Result<()> {
+        let shell = self
+            .shells
+            .get(shell_id)
+            .ok_or_else(|| anyhow!("Shell not found: {}", shell_id))?;
+
+        shell.cmd_tx.send(ShellCmd::Resize(cols, rows))
+            .map_err(|_| anyhow!("Shell task has exited"))?;
         Ok(())
     }
 
     pub fn close_shell(&mut self, shell_id: &str) {
-        self.shells.remove(shell_id);
+        if let Some(shell) = self.shells.remove(shell_id) {
+            let _ = shell.cmd_tx.send(ShellCmd::Close);
+        }
     }
 
     // ── Remote OpenCode ───────────────────────────────────────────────────────
@@ -650,9 +708,8 @@ pub async fn ssh_write_shell(
     data: String,
     state: State<'_, SshState>,
 ) -> Result<(), String> {
-    let mut mgr = state.lock().await;
+    let mgr = state.lock().await;
     mgr.write_shell(&shell_id, data.as_bytes())
-        .await
         .map_err(|e| e.to_string())
 }
 
@@ -661,6 +718,18 @@ pub async fn ssh_close_shell(shell_id: String, state: State<'_, SshState>) -> Re
     let mut mgr = state.lock().await;
     mgr.close_shell(&shell_id);
     Ok(())
+}
+
+#[tauri::command]
+pub async fn ssh_resize_shell(
+    shell_id: String,
+    cols: u32,
+    rows: u32,
+    state: State<'_, SshState>,
+) -> Result<(), String> {
+    let mgr = state.lock().await;
+    mgr.resize_shell(&shell_id, cols, rows)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
