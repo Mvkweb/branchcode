@@ -42,6 +42,7 @@ function TerminalView({ term, active }: { term: TerminalInstance; active: boolea
     };
 
     doResize();
+    term.terminal.focus();
 
     const resizeObserver = new ResizeObserver(() => {
       if (resizeTimeout.current) clearTimeout(resizeTimeout.current);
