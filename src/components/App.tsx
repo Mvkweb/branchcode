@@ -27,6 +27,7 @@ import { useChat } from '../hooks/useChat';
 import { useSessions } from '../hooks/useSessions';
 import { useFileTree } from '../hooks/useFileTree';
 import { useGit } from '../hooks/useGit';
+import { useSsh } from '../hooks/useSsh';
 import { SettingsModal } from './Settings';
 import UpdateModal from './UpdateModal';
 import { ChatMessages, MessagePlaceholder } from './ChatMessages';
@@ -660,6 +661,9 @@ export default function App() {
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [showFileTree, setShowFileTree] = useState(false);
   const [showGitPanel, setShowGitPanel] = useState(false);
+
+  // SSH state
+  const ssh = useSsh();
   
   // Terminal sizing state
   const [showTerminal, setShowTerminal] = useState(false);
@@ -1322,6 +1326,14 @@ export default function App() {
               onCommit={git.commit}
               onCheckoutBranch={git.checkoutBranch}
               onCreateBranch={git.createBranch}
+              sshServers={ssh.servers}
+              sshConnections={ssh.connections}
+              sshConnecting={ssh.connecting}
+              sshError={ssh.error}
+              onSshSaveServer={ssh.saveServer}
+              onSshDeleteServer={ssh.deleteServer}
+              onSshConnect={ssh.connect}
+              onSshDisconnect={ssh.disconnect}
             />
           </motion.div>
         )}

@@ -250,3 +250,95 @@ export async function resizeTerminal(id: string, cols: number, rows: number): Pr
 export async function closeTerminal(id: string): Promise<void> {
   return invoke('close_terminal', { id });
 }
+
+// ── SSH Types ──
+
+export interface SshServerConfig {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  auth_method: SshAuthMethod;
+  default_directory?: string;
+}
+
+export type SshAuthMethod =
+  | { type: 'password'; password: string }
+  | { type: 'key'; path: string; passphrase?: string };
+
+export interface SshConnectionInfo {
+  config_id: string;
+  server_name: string;
+  connected: boolean;
+  remote_opencode_ready: boolean;
+}
+
+export interface SftpFileEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+}
+
+// ── SSH Commands ──
+
+export async function sshListServers(): Promise<SshServerConfig[]> {
+  return invoke('ssh_list_servers');
+}
+
+export async function sshSaveServer(config: SshServerConfig): Promise<SshServerConfig> {
+  return invoke('ssh_save_server', { config });
+}
+
+export async function sshUpdateServer(config: SshServerConfig): Promise<void> {
+  return invoke('ssh_update_server', { config });
+}
+
+export async function sshDeleteServer(id: string): Promise<void> {
+  return invoke('ssh_delete_server', { id });
+}
+
+export async function sshConnect(configId: string): Promise<SshConnectionInfo> {
+  return invoke('ssh_connect', { configId });
+}
+
+export async function sshDisconnect(configId: string): Promise<void> {
+  return invoke('ssh_disconnect', { configId });
+}
+
+export async function sshGetConnections(): Promise<SshConnectionInfo[]> {
+  return invoke('ssh_get_connections');
+}
+
+export async function sshListDir(configId: string, path: string): Promise<SftpFileEntry[]> {
+  return invoke('ssh_list_dir', { configId, path });
+}
+
+export async function sshReadFile(configId: string, path: string): Promise<string> {
+  return invoke('ssh_read_file', { configId, path });
+}
+
+export async function sshWriteFile(configId: string, path: string, content: string): Promise<void> {
+  return invoke('ssh_write_file', { configId, path, content });
+}
+
+export async function sshSpawnShell(configId: string): Promise<string> {
+  return invoke('ssh_spawn_shell', { configId });
+}
+
+export async function sshWriteShell(shellId: string, data: string): Promise<void> {
+  return invoke('ssh_write_shell', { shellId, data });
+}
+
+export async function sshCloseShell(shellId: string): Promise<void> {
+  return invoke('ssh_close_shell', { shellId });
+}
+
+export async function sshExecCommand(configId: string, command: string): Promise<string> {
+  return invoke('ssh_exec_command', { configId, command });
+}
+
+export async function sshStartRemoteOpencode(configId: string): Promise<number> {
+  return invoke('ssh_start_remote_opencode', { configId });
+}

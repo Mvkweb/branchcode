@@ -21,8 +21,18 @@ import {
   CircleDot,
   Folder,
   SquareTerminal,
+  Server,
+  Globe,
+  Key,
+  Lock,
+  Pencil,
+  Trash2,
+  MonitorSmartphone,
+  TerminalSquare,
+  Wifi,
+  WifiOff,
 } from 'lucide-react';
-import type { GitStatus, GitFile, GitBranch as GitBranchType } from '../lib/tauri';
+import type { GitStatus, GitFile, GitBranch as GitBranchType, SshServerConfig, SshConnectionInfo, SshAuthMethod } from '../lib/tauri';
 import { DiffViewer } from './DiffViewer';
 
 interface GitPanelProps {
@@ -37,6 +47,16 @@ interface GitPanelProps {
   onCommit: (message: string) => void;
   onCheckoutBranch: (name: string) => void;
   onCreateBranch: (name: string) => void;
+  // SSH props
+  sshServers?: SshServerConfig[];
+  sshConnections?: SshConnectionInfo[];
+  sshConnecting?: string | null;
+  sshError?: string | null;
+  onSshSaveServer?: (config: SshServerConfig) => void;
+  onSshDeleteServer?: (id: string) => void;
+  onSshConnect?: (configId: string) => void;
+  onSshDisconnect?: (configId: string) => void;
+  onSshSpawnTerminal?: (configId: string, serverName: string) => void;
 }
 
 // Minimalist status icons
@@ -52,15 +72,14 @@ const statusIcons: Record<string, React.ReactNode> = {
 const fastTransition = { duration: 0.15 };
 const springTransition = { type: 'spring', bounce: 0, duration: 0.3 } as const;
 
-type DockTab = 'explorer' | 'todo' | 'git' | 'terminal';
+type DockTab = 'explorer' | 'todo' | 'git' | 'terminal' | 'ssh';
 
-const dockItems: { id: DockTab; icon: React.ReactNode; label: string }[] = [
-  // Updated to IntelliJ-style Folder
+const dockItems: { id: DockTab; icon: React.ReactNode; label: string; separator?: boolean }[] = [
   { id: 'explorer', icon: <Folder size={18} strokeWidth={1.75} />, label: 'File Tree' },
   { id: 'todo', icon: <ListTodo size={18} strokeWidth={1.75} />, label: 'Todo List' },
   { id: 'git', icon: <GitBranch size={18} strokeWidth={1.75} />, label: 'Source Control' },
-  // Updated to IntelliJ-style Terminal Monitor
   { id: 'terminal', icon: <SquareTerminal size={18} strokeWidth={1.75} />, label: 'Terminal' },
+  { id: 'ssh', icon: <Server size={18} strokeWidth={1.75} />, label: 'Remote Servers', separator: true },
 ];
 
 function FileRow({
@@ -270,6 +289,402 @@ function TabPlaceholder({ icon, title }: { icon: React.ReactNode; title: string 
   );
 }
 
+// ── SSH Server Form ────────────────────────────────────────────────────────────
+
+function SshServerForm({
+  initial,
+  onSave,
+  onCancel,
+}: {
+  initial?: SshServerConfig;
+  onSave: (config: SshServerConfig) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(initial?.name ?? '');
+  const [host, setHost] = useState(initial?.host ?? '');
+  const [port, setPort] = useState(initial?.port ?? 22);
+  const [username, setUsername] = useState(initial?.username ?? '');
+  const [authType, setAuthType] = useState<'password' | 'key'>(
+    initial?.auth_method?.type === 'key' ? 'key' : 'password'
+  );
+  const [password, setPassword] = useState(
+    initial?.auth_method?.type === 'password' ? initial.auth_method.password : ''
+  );
+  const [keyPath, setKeyPath] = useState(
+    initial?.auth_method?.type === 'key' ? initial.auth_method.path : '~/.ssh/id_rsa'
+  );
+  const [passphrase, setPassphrase] = useState(
+    initial?.auth_method?.type === 'key' ? (initial.auth_method.passphrase ?? '') : ''
+  );
+  const [defaultDir, setDefaultDir] = useState(initial?.default_directory ?? '');
+
+  const isValid = name.trim() && host.trim() && username.trim();
+
+  const handleSave = () => {
+    if (!isValid) return;
+    const auth_method: SshAuthMethod = authType === 'password'
+      ? { type: 'password', password }
+      : { type: 'key', path: keyPath, passphrase: passphrase || undefined };
+
+    onSave({
+      id: initial?.id ?? '',
+      name: name.trim(),
+      host: host.trim(),
+      port,
+      username: username.trim(),
+      auth_method,
+      default_directory: defaultDir.trim() || undefined,
+    });
+  };
+
+  const inputCx = "w-full h-[32px] bg-[#141414] border border-white/[0.06] rounded-[6px] px-3 text-[12px] text-neutral-200 placeholder-neutral-600 outline-none focus:border-white/20 focus:bg-[#1a1a1a] transition-colors";
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 4 }}
+      transition={{ duration: 0.18 }}
+      className="p-4 space-y-3"
+    >
+      <div className="flex items-center justify-between mb-1">
+        <h3 className="text-[12px] font-semibold text-neutral-200">
+          {initial ? 'Edit Server' : 'New Server'}
+        </h3>
+        <button onClick={onCancel} className="p-1 text-neutral-500 hover:text-neutral-300 transition-colors">
+          <X size={14} />
+        </button>
+      </div>
+
+      <div className="space-y-2.5">
+        <div>
+          <label className="text-[11px] text-neutral-500 mb-1 block">Name</label>
+          <input className={inputCx} value={name} onChange={e => setName(e.target.value)} placeholder="My Server" />
+        </div>
+        <div className="flex gap-2">
+          <div className="flex-1">
+            <label className="text-[11px] text-neutral-500 mb-1 block">Host</label>
+            <input className={inputCx} value={host} onChange={e => setHost(e.target.value)} placeholder="192.168.1.10" />
+          </div>
+          <div className="w-[72px]">
+            <label className="text-[11px] text-neutral-500 mb-1 block">Port</label>
+            <input className={inputCx} type="number" value={port} onChange={e => setPort(Number(e.target.value))} />
+          </div>
+        </div>
+        <div>
+          <label className="text-[11px] text-neutral-500 mb-1 block">Username</label>
+          <input className={inputCx} value={username} onChange={e => setUsername(e.target.value)} placeholder="root" />
+        </div>
+
+        {/* Auth type selector */}
+        <div>
+          <label className="text-[11px] text-neutral-500 mb-1.5 block">Authentication</label>
+          <div className="flex p-[2px] bg-[#111] rounded-[6px] border border-white/[0.04]">
+            <button
+              onClick={() => setAuthType('key')}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[11px] font-medium rounded-[4px] transition-colors ${
+                authType === 'key' ? 'text-neutral-100 bg-[#222] border border-white/[0.04]' : 'text-neutral-500 hover:text-neutral-300'
+              }`}
+            >
+              <Key size={11} /> SSH Key
+            </button>
+            <button
+              onClick={() => setAuthType('password')}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[11px] font-medium rounded-[4px] transition-colors ${
+                authType === 'password' ? 'text-neutral-100 bg-[#222] border border-white/[0.04]' : 'text-neutral-500 hover:text-neutral-300'
+              }`}
+            >
+              <Lock size={11} /> Password
+            </button>
+          </div>
+        </div>
+
+        {authType === 'password' ? (
+          <div>
+            <label className="text-[11px] text-neutral-500 mb-1 block">Password</label>
+            <input className={inputCx} type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" />
+          </div>
+        ) : (
+          <>
+            <div>
+              <label className="text-[11px] text-neutral-500 mb-1 block">Key Path</label>
+              <input className={inputCx} value={keyPath} onChange={e => setKeyPath(e.target.value)} placeholder="~/.ssh/id_rsa" />
+            </div>
+            <div>
+              <label className="text-[11px] text-neutral-500 mb-1 block">Passphrase <span className="text-neutral-600">(optional)</span></label>
+              <input className={inputCx} type="password" value={passphrase} onChange={e => setPassphrase(e.target.value)} placeholder="••••••••" />
+            </div>
+          </>
+        )}
+
+        <div>
+          <label className="text-[11px] text-neutral-500 mb-1 block">Default Directory <span className="text-neutral-600">(optional)</span></label>
+          <input className={inputCx} value={defaultDir} onChange={e => setDefaultDir(e.target.value)} placeholder="/home/user/projects" />
+        </div>
+      </div>
+
+      <div className="flex gap-2 pt-1">
+        <button
+          onClick={onCancel}
+          className="flex-1 px-3 py-1.5 bg-[#141414] hover:bg-[#1a1a1a] border border-white/[0.04] rounded-[6px] text-[12px] text-neutral-400 hover:text-neutral-200 transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleSave}
+          disabled={!isValid}
+          className="flex-1 px-3 py-1.5 bg-teal-500/15 hover:bg-teal-500/25 border border-teal-500/25 rounded-[6px] text-[12px] font-medium text-teal-300 hover:text-teal-200 transition-all disabled:opacity-40 disabled:pointer-events-none"
+        >
+          {initial ? 'Save' : 'Save & Connect'}
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
+// ── SSH Server Card ────────────────────────────────────────────────────────────
+
+function SshServerCard({
+  config,
+  isConnected,
+  isConnecting,
+  onConnect,
+  onDisconnect,
+  onEdit,
+  onDelete,
+  onTerminal,
+}: {
+  config: SshServerConfig;
+  isConnected: boolean;
+  isConnecting: boolean;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onTerminal: () => void;
+}) {
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.97 }}
+      transition={{ duration: 0.16 }}
+      className={`mx-3 mb-2 rounded-[8px] border transition-colors ${
+        isConnected
+          ? 'border-teal-500/20 bg-teal-500/[0.04]'
+          : 'border-white/[0.05] bg-white/[0.015] hover:bg-white/[0.03]'
+      }`}
+    >
+      <div className="flex items-center gap-3 px-3 py-2.5">
+        <div className={`relative flex items-center justify-center w-8 h-8 rounded-lg ${
+          isConnected ? 'bg-teal-500/15 text-teal-400' : 'bg-white/[0.04] text-neutral-500'
+        }`}>
+          <MonitorSmartphone size={16} />
+          {isConnected && (
+            <span className="absolute -bottom-0.5 -right-0.5 flex h-[9px] w-[9px] items-center justify-center rounded-full bg-[#0a0a0a]">
+              <span className="h-[6px] w-[6px] rounded-full bg-teal-400 animate-pulse" />
+            </span>
+          )}
+        </div>
+
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-[12.5px] font-medium text-neutral-200 truncate">{config.name}</span>
+            {isConnected && (
+              <span className="text-[9px] font-semibold tracking-wider px-1.5 py-[1px] rounded-full bg-teal-500/15 text-teal-400 border border-teal-500/20 uppercase">
+                live
+              </span>
+            )}
+          </div>
+          <div className="text-[11px] text-neutral-500 font-mono truncate mt-0.5">
+            {config.username}@{config.host}:{config.port}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-1 px-2 pb-2">
+        {isConnected ? (
+          <>
+            <button
+              onClick={onTerminal}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-[5px] text-[11px] font-medium text-teal-300/80 hover:text-teal-200 hover:bg-teal-500/10 transition-colors"
+            >
+              <TerminalSquare size={12} /> Terminal
+            </button>
+            <button
+              onClick={onDisconnect}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-[5px] text-[11px] font-medium text-neutral-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+            >
+              <WifiOff size={12} /> Disconnect
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              onClick={onConnect}
+              disabled={isConnecting}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-[5px] text-[11px] font-medium text-teal-400/70 hover:text-teal-300 hover:bg-teal-500/10 transition-colors disabled:opacity-40"
+            >
+              {isConnecting ? <Loader2 size={12} className="animate-spin" /> : <Wifi size={12} />}
+              {isConnecting ? 'Connecting...' : 'Connect'}
+            </button>
+            <button onClick={onEdit} className="p-1 text-neutral-600 hover:text-neutral-300 hover:bg-white/[0.06] rounded transition-colors">
+              <Pencil size={12} />
+            </button>
+            <button onClick={onDelete} className="p-1 text-neutral-600 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors">
+              <Trash2 size={12} />
+            </button>
+          </>
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
+// ── SSH Panel ──────────────────────────────────────────────────────────────────
+
+function SshPanel({
+  servers = [],
+  connections = [],
+  connecting,
+  error,
+  onSaveServer,
+  onDeleteServer,
+  onConnect,
+  onDisconnect,
+  onSpawnTerminal,
+}: {
+  servers: SshServerConfig[];
+  connections: SshConnectionInfo[];
+  connecting?: string | null;
+  error?: string | null;
+  onSaveServer?: (config: SshServerConfig) => void;
+  onDeleteServer?: (id: string) => void;
+  onConnect?: (configId: string) => void;
+  onDisconnect?: (configId: string) => void;
+  onSpawnTerminal?: (configId: string, serverName: string) => void;
+}) {
+  const [showForm, setShowForm] = useState(false);
+  const [editingServer, setEditingServer] = useState<SshServerConfig | undefined>();
+
+  const isConnected = (configId: string) =>
+    connections.some(c => c.config_id === configId);
+
+  const handleSave = (config: SshServerConfig) => {
+    onSaveServer?.(config);
+    setShowForm(false);
+    setEditingServer(undefined);
+    // Auto-connect on new server
+    if (!config.id && onConnect) {
+      // The backend will assign an ID, so we need to wait for servers to refresh
+    }
+  };
+
+  const handleEdit = (config: SshServerConfig) => {
+    setEditingServer(config);
+    setShowForm(true);
+  };
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-3 border-b border-white/[0.04]">
+        <div className="flex items-center gap-2">
+          <Server size={14} className="text-teal-400/60" />
+          <span className="text-[12.5px] font-medium text-neutral-300 tracking-wide">Remote Servers</span>
+          {connections.length > 0 && (
+            <span className="text-[10px] font-mono text-teal-400/70 bg-teal-500/10 px-1.5 py-[1px] rounded-full">
+              {connections.length} active
+            </span>
+          )}
+        </div>
+        <button
+          onClick={() => { setShowForm(!showForm); setEditingServer(undefined); }}
+          className={`p-1 rounded-[5px] transition-all ${
+            showForm
+              ? 'text-teal-400 bg-teal-500/15 rotate-45'
+              : 'text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.06]'
+          }`}
+        >
+          <Plus size={14} />
+        </button>
+      </div>
+
+      {/* Error */}
+      <AnimatePresence>
+        {error && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="px-3 pt-2"
+          >
+            <div className="flex items-center gap-2 px-3 py-2 rounded-[6px] bg-red-500/10 border border-red-500/20">
+              <AlertCircle size={13} className="text-red-400 flex-shrink-0" />
+              <span className="text-[11px] text-red-300">{error}</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Form */}
+      <AnimatePresence mode="wait">
+        {showForm && (
+          <SshServerForm
+            key={editingServer?.id ?? 'new'}
+            initial={editingServer}
+            onSave={handleSave}
+            onCancel={() => { setShowForm(false); setEditingServer(undefined); }}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Server List */}
+      <div className="flex-1 overflow-y-auto custom-scrollbar pt-2">
+        <AnimatePresence mode="popLayout">
+          {servers.length === 0 && !showForm ? (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="flex flex-col items-center justify-center h-full px-6 pb-10"
+            >
+              <div className="w-12 h-12 rounded-full bg-white/[0.02] border border-white/[0.05] flex items-center justify-center mb-4">
+                <Server size={22} className="text-neutral-600" />
+              </div>
+              <p className="text-[13px] font-medium text-neutral-300">No servers configured</p>
+              <p className="text-[11.5px] text-neutral-500 mt-1.5 text-center leading-relaxed max-w-[200px]">
+                Add a remote server to connect and develop via SSH.
+              </p>
+              <button
+                onClick={() => setShowForm(true)}
+                className="mt-5 flex items-center gap-1.5 px-4 py-2 rounded-[7px] border border-teal-500/22 bg-teal-500/8 text-[12px] font-medium text-teal-400/75 hover:border-teal-500/35 hover:bg-teal-500/14 hover:text-teal-300 transition-colors"
+              >
+                <Plus size={14} />
+                Add Server
+              </button>
+            </motion.div>
+          ) : (
+            servers.map(server => (
+              <SshServerCard
+                key={server.id}
+                config={server}
+                isConnected={isConnected(server.id)}
+                isConnecting={connecting === server.id}
+                onConnect={() => onConnect?.(server.id)}
+                onDisconnect={() => onDisconnect?.(server.id)}
+                onEdit={() => handleEdit(server)}
+                onDelete={() => onDeleteServer?.(server.id)}
+                onTerminal={() => onSpawnTerminal?.(server.id, server.name)}
+              />
+            ))
+          )}
+        </AnimatePresence>
+      </div>
+    </div>
+  );
+}
+
 export const GitPanel = memo(function GitPanel({
   status,
   branches,
@@ -281,6 +696,15 @@ export const GitPanel = memo(function GitPanel({
   onStageAll,
   onCommit,
   onCheckoutBranch,
+  sshServers = [],
+  sshConnections = [],
+  sshConnecting,
+  sshError,
+  onSshSaveServer,
+  onSshDeleteServer,
+  onSshConnect,
+  onSshDisconnect,
+  onSshSpawnTerminal,
 }: GitPanelProps) {
   const [activeDockTab, setActiveDockTab] = useState<DockTab>('git');
   const [activeGitTab, setActiveGitTab] = useState<'unstaged' | 'staged'>('unstaged');
@@ -465,6 +889,18 @@ export const GitPanel = memo(function GitPanel({
               </div>
             </>
           )
+        ) : activeDockTab === 'ssh' ? (
+          <SshPanel
+            servers={sshServers}
+            connections={sshConnections}
+            connecting={sshConnecting}
+            error={sshError}
+            onSaveServer={onSshSaveServer}
+            onDeleteServer={onSshDeleteServer}
+            onConnect={onSshConnect}
+            onDisconnect={onSshDisconnect}
+            onSpawnTerminal={onSshSpawnTerminal}
+          />
         ) : activeDockTab === 'explorer' ? (
           <TabPlaceholder icon={<Folder size={24} />} title="IDE File Explorer" />
         ) : activeDockTab === 'todo' ? (
@@ -479,18 +915,30 @@ export const GitPanel = memo(function GitPanel({
       {/* ── Right Navigation Dock ── */}
       <div className="w-[48px] flex-shrink-0 flex flex-col items-center py-3 gap-3 bg-[#0c0c0c] relative z-10 shadow-[-4px_0_12px_rgba(0,0,0,0.3)] border-l border-white/[0.02]">
         {dockItems.map((item) => (
-          <button
-            key={item.id}
-            onClick={() => setActiveDockTab(item.id)}
-            title={item.label}
-            className={`relative w-[34px] h-[34px] flex items-center justify-center rounded-[8px] transition-all duration-200 group ${
-              activeDockTab === item.id
-                ? 'text-neutral-200 bg-white/[0.08] shadow-inner shadow-white/5'
-                : 'text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.04]'
-            }`}
-          >
-            {item.icon}
-          </button>
+          <div key={item.id} className="flex flex-col items-center">
+            {item.separator && (
+              <div className="w-5 h-px bg-white/[0.06] mb-3" />
+            )}
+            <button
+              onClick={() => setActiveDockTab(item.id)}
+              title={item.label}
+              className={`relative w-[34px] h-[34px] flex items-center justify-center rounded-[8px] transition-all duration-200 group ${
+                activeDockTab === item.id
+                  ? item.id === 'ssh'
+                    ? 'text-teal-400 bg-teal-500/[0.12] shadow-inner shadow-teal-500/5'
+                    : 'text-neutral-200 bg-white/[0.08] shadow-inner shadow-white/5'
+                  : item.id === 'ssh'
+                    ? 'text-teal-500/50 hover:text-teal-400 hover:bg-teal-500/[0.06]'
+                    : 'text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.04]'
+              }`}
+            >
+              {item.icon}
+              {/* Connection indicator dot */}
+              {item.id === 'ssh' && sshConnections.length > 0 && activeDockTab !== 'ssh' && (
+                <span className="absolute top-1 right-1 w-[6px] h-[6px] rounded-full bg-teal-400 shadow-[0_0_6px_rgba(45,212,191,0.5)]" />
+              )}
+            </button>
+          </div>
         ))}
       </div>
     </div>

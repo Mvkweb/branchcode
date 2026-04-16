@@ -3,9 +3,11 @@ mod server;
 mod git;
 mod pty;
 mod updater;
+mod ssh_client;
 
 use opencode_client::OcStreamEvent;
 use pty::PtyState;
+use ssh_client::SshState;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
@@ -308,6 +310,14 @@ pub fn run() {
         println!("Not a git repository: {}", project_dir);
     }
 
+    // Initialize SSH manager
+    let ssh_data_dir = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("branchcode");
+    let ssh_state: SshState = Arc::new(tokio::sync::Mutex::new(
+        ssh_client::SshManager::new(ssh_data_dir),
+    ));
+
     let state = AppState {
         client,
         project_dir,
@@ -321,6 +331,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state.pty.clone())
+        .manage(ssh_state)
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             get_config,
@@ -356,6 +367,21 @@ pub fn run() {
             updater::check_updates,
             updater::download_and_install,
             updater::get_release_url,
+            ssh_client::ssh_list_servers,
+            ssh_client::ssh_save_server,
+            ssh_client::ssh_update_server,
+            ssh_client::ssh_delete_server,
+            ssh_client::ssh_connect,
+            ssh_client::ssh_disconnect,
+            ssh_client::ssh_get_connections,
+            ssh_client::ssh_list_dir,
+            ssh_client::ssh_read_file,
+            ssh_client::ssh_write_file,
+            ssh_client::ssh_spawn_shell,
+            ssh_client::ssh_write_shell,
+            ssh_client::ssh_close_shell,
+            ssh_client::ssh_exec_command,
+            ssh_client::ssh_start_remote_opencode,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
