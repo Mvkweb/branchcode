@@ -1027,14 +1027,14 @@ export default function App() {
                   icon={
                     <div className="relative">
                       <Server size={14} className="text-teal-500" />
-                      {ssh.connections[server.id] && (
+                      {ssh.isConnected(server.id) && (
                         <div className="absolute -bottom-0.5 -right-0.5 w-[6px] h-[6px] bg-teal-400 rounded-full border border-[#0f0f0f]" />
                       )}
                     </div>
                   }
                 >
                   <div className="text-[12px] text-neutral-600 px-2 py-1">
-                    {ssh.connections[server.id] ? 'No remote threads' : 'Not connected'}
+                    {ssh.isConnected(server.id) ? 'No remote threads' : 'Not connected'}
                   </div>
                 </ProjectFolder>
               ))}
@@ -1042,78 +1042,12 @@ export default function App() {
           </div>
 
           <div className="px-4 mb-6">
-            <button
-              onClick={() => setShowFileTree(!showFileTree)}
-              className="flex items-center w-full justify-between text-[11px] font-semibold text-neutral-500 mb-2 tracking-wider hover:text-neutral-300 transition-colors"
-            >
+            <div className="flex items-center w-full justify-between text-[11px] font-semibold text-neutral-500 mb-2 tracking-wider">
               <div className="flex items-center gap-2">
                 <SquareTerminal size={12} />
                 FILES
               </div>
-              <ChevronDown
-                size={12}
-                className={`transition-transform ${showFileTree ? 'rotate-180' : ''}`}
-              />
-            </button>
-            {showFileTree && (
-              <div className="space-y-4 mt-2">
-                {/* Local Files */}
-                <div className="space-y-0.5">
-                  <div className="text-[10px] font-semibold text-neutral-600 mb-1 px-2 uppercase tracking-wider">
-                    {config?.project_dir ? config.project_dir.split('\\').pop() : 'Local'}
-                  </div>
-                  {Object.entries(files).map(([name, info]) => {
-                    const entry = info as Record<string, unknown>;
-                    const isDir = entry.type === 'directory';
-                    return (
-                      <SidebarItem
-                        key={`local-${name}`}
-                        icon={isDir ? <Folder size={14} /> : <FileText size={14} />}
-                        label={name}
-                        onClick={() => {
-                          if (isDir && entry.path) loadDirectory(entry.path as string);
-                        }}
-                      />
-                    );
-                  })}
-                  {Object.keys(files).length === 0 && (
-                    <div className="text-[12px] text-neutral-600 px-2">No local files</div>
-                  )}
-                </div>
-
-                {/* Remote Files */}
-                {ssh.activeConnectionId && (
-                  <div className="space-y-0.5">
-                    <div className="flex items-center gap-2 text-[10px] font-semibold text-teal-600/80 mb-1 px-2 uppercase tracking-wider">
-                      <Globe size={10} className="text-teal-500" />
-                      {ssh.activeConnection?.server_name || 'Remote'}
-                    </div>
-                    {remoteFileTree.loading && remoteFileTree.files.length === 0 ? (
-                      <div className="flex items-center gap-2 px-2 py-1 text-[12px] text-neutral-500">
-                        <div className="w-3 h-3 border-2 border-teal-500/20 border-t-teal-500 rounded-full animate-spin" />
-                        Loading...
-                      </div>
-                    ) : (
-                      remoteFileTree.files.map((file) => (
-                        <SidebarItem
-                          key={`remote-${file.path}`}
-                          icon={file.is_dir ? <Folder size={14} className="text-teal-500" /> : <FileText size={14} className="text-teal-500/80" />}
-                          label={file.name}
-                          onClick={() => {
-                            if (file.is_dir && ssh.activeConnectionId) {
-                              remoteFileTree.loadDirectory(ssh.activeConnectionId, file.path);
-                            }
-                          }}
-                        />
-                      ))
-                    )}
-                    {!remoteFileTree.loading && remoteFileTree.files.length === 0 && (
-                      <div className="text-[12px] text-neutral-600 px-2">No remote files</div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
+            </div>
           </div>
         </div>
 

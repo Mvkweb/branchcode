@@ -113,12 +113,14 @@ export function useTerminal() {
       term.onData((data: string) => {
         invoke('write_terminal', { id, data }).catch(() => {});
       });
-    } else {
+    } else if (opts?.type === 'ssh') {
       label = `SSH: ${opts.serverName}`;
       id = await invoke<string>('ssh_spawn_shell', { configId: opts.configId });
       term.onData((data: string) => {
         invoke('ssh_write_shell', { shellId: id, data }).catch(() => {});
       });
+    } else {
+      throw new Error("Invalid terminal type");
     }
 
     const newInstance: TerminalInstance = {
