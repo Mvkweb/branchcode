@@ -1363,45 +1363,44 @@ export default function App() {
       </div>
 
       {/* Git Panel - Right Sidebar */}
-      <AnimatePresence>
-        {showGitPanel && (
-          <motion.div
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 380, opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
-            transition={{ type: 'spring', bounce: 0, duration: 0.25 }}
-            className="flex-shrink-0 h-full border-l border-[#1a1a1a]"
-          >
-            <GitPanel
-              status={git.status}
-              branches={git.branches}
-              currentBranch={git.currentBranch}
-              loading={git.loading}
-              onRefresh={git.refresh}
-              onStageFile={git.stageFile}
-              onUnstageFile={git.unstageFile}
-              onStageAll={git.stageAll}
-              onCommit={git.commit}
-              onCheckoutBranch={git.checkoutBranch}
-              onCreateBranch={git.createBranch}
-              sshServers={ssh.servers}
-              sshConnections={ssh.connections}
-              sshConnecting={ssh.connecting}
-              sshError={ssh.error}
-              onSshSaveServer={ssh.saveServer}
-              onSshDeleteServer={ssh.deleteServer}
-              onSshConnect={ssh.connect}
-              onSshDisconnect={ssh.disconnect}
-              onSshSpawnTerminal={(configId, serverName) => {
-                setShowTerminal(true);
-                window.dispatchEvent(new CustomEvent('spawn-ssh-terminal', { 
-                  detail: { configId, serverName } 
-                }));
-              }}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <motion.div
+        initial={false}
+        animate={{ width: showGitPanel ? 380 : 40 }}
+        transition={{ type: 'spring', bounce: 0, duration: 0.25 }}
+        className="flex-shrink-0 h-full border-l border-[#1a1a1a] overflow-hidden bg-[#0d0d0d] relative z-20"
+      >
+        <div className="absolute top-0 right-0 w-[380px] h-full">
+          <GitPanel
+            status={git.status}
+            branches={git.branches}
+            currentBranch={git.currentBranch}
+            loading={git.loading}
+            onRefresh={git.refresh}
+            onStageFile={git.stageFile}
+            onUnstageFile={git.unstageFile}
+            onStageAll={git.stageAll}
+            onCommit={git.commit}
+            onCheckoutBranch={git.checkoutBranch}
+            onCreateBranch={git.createBranch}
+            sshServers={ssh.servers}
+            sshConnections={ssh.connections}
+            sshConnecting={ssh.connecting}
+            sshError={ssh.error}
+            onSshSaveServer={ssh.saveServer}
+            onSshDeleteServer={ssh.deleteServer}
+            onSshConnect={ssh.connect}
+            onSshDisconnect={ssh.disconnect}
+            onSshSpawnTerminal={(configId, serverName) => {
+              setShowTerminal(true);
+              window.dispatchEvent(new CustomEvent('spawn-ssh-terminal', { 
+                detail: { configId, serverName } 
+              }));
+            }}
+            isOpen={showGitPanel}
+            onToggle={setShowGitPanel}
+          />
+        </div>
+      </motion.div>
     </div>
   );
 }

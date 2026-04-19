@@ -303,20 +303,19 @@ function StatusMessage({ icon, text }: { icon?: React.ReactNode; text: string })
 // ── File Explorer ──────────────────────────────────────────────────────────────
 
 export function FileExplorer() {
-  const { config } = useChat();
   const ssh = useSsh();
 
-  const localProjectName = config?.project_dir
-    ? config.project_dir.split(/[\\/]/).pop()
-    : 'Local Project';
-  const remoteConnection = ssh.activeConnection;
+  const localProjectName = 'Local Project';
 
-  const localState = useTreeState(config?.project_dir || '.', undefined);
-  const remoteState = useTreeState('.', remoteConnection?.config_id);
+  const localState = useTreeState('.', undefined);
 
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [localExpanded, setLocalExpanded] = useState(true);
-  const [remoteExpanded, setRemoteExpanded] = useState(true);
+  const [remoteExpanded, setRemoteExpanded] = useState<Record<string, boolean>>({});
+
+  const toggleRemote = (configId: string) => {
+    setRemoteExpanded(prev => ({ ...prev, [configId]: !prev[configId] }));
+  };
 
   return (
     <div
@@ -394,60 +393,87 @@ export function FileExplorer() {
           </AnimatePresence>
         </div>
 
-        {/* Remote SSH Section */}
-        {remoteConnection && (
-          <div>
-            {/* Hairline divider */}
-            <div className="mx-3 my-[6px] h-px bg-white/[0.04]" />
-
-            <SectionHeader
-              expanded={remoteExpanded}
-              onToggle={() => setRemoteExpanded(!remoteExpanded)}
-              icon={<Globe size={10.5} strokeWidth={1.75} className="text-[#3b82f6]/80" />}
-              label={remoteConnection.server_name}
-              badge="ssh"
-            />
-
-            <AnimatePresence initial={false}>
-              {remoteExpanded && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{
-                    height: { duration: 0.18, ease },
-                    opacity: { duration: 0.12 },
-                  }}
-                  className="overflow-hidden"
-                >
-                  {remoteState.loading ? (
-                    <StatusMessage
-                      icon={<Loader2 size={11} className="animate-spin" />}
-                      text="Connecting…"
-                    />
-                  ) : remoteState.rootNodes.length === 0 ? (
-                    <StatusMessage text="No files" />
-                  ) : (
-                    <div>
-                      {remoteState.rootNodes.map(node => (
-                        <TreeNode
-                          key={node.path}
-                          node={node}
-                          level={0}
-                          onToggle={remoteState.toggleNode}
-                          onSelect={p => setSelectedPath(p)}
-                          selectedPath={selectedPath}
-                          configId={remoteConnection.config_id}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        )}
+        {/* Remote SSH Sections */}
+        {ssh.connections.map(conn => (
+          <RemoteTreeSection 
+            key={conn.config_id} 
+            connection={conn} 
+            expanded={remoteExpanded[conn.config_id] ?? true} 
+            onToggle={() => toggleRemote(conn.config_id)} 
+            selectedPath={selectedPath} 
+            onSelect={setSelectedPath} 
+          />
+        ))}
       </div>
+    </div>
+  );
+}
+
+function RemoteTreeSection({ 
+  connection, 
+  expanded, 
+  onToggle, 
+  selectedPath, 
+  onSelect 
+}: { 
+  connection: any; 
+  expanded: boolean; 
+  onToggle: () => void; 
+  selectedPath: string | null; 
+  onSelect: (p: string) => void;
+}) {
+  const remoteState = useTreeState('.', connection.config_id);
+
+  return (
+    <div>
+      {/* Hairline divider */}
+      <div className="mx-3 my-[6px] h-px bg-white/[0.04]" />
+
+      <SectionHeader
+        expanded={expanded}
+        onToggle={onToggle}
+        icon={<Globe size={10.5} strokeWidth={1.75} className="text-[#3b82f6]/80" />}
+        label={connection.server_name}
+        badge="ssh"
+      />
+
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{
+              height: { duration: 0.18, ease },
+              opacity: { duration: 0.12 },
+            }}
+            className="overflow-hidden"
+          >
+            {remoteState.loading ? (
+              <StatusMessage
+                icon={<Loader2 size={11} className="animate-spin" />}
+                text="Connecting…"
+              />
+            ) : remoteState.rootNodes.length === 0 ? (
+              <StatusMessage text="No files" />
+            ) : (
+              <div>
+                {remoteState.rootNodes.map(node => (
+                  <TreeNode
+                    key={node.path}
+                    node={node}
+                    level={0}
+                    onToggle={remoteState.toggleNode}
+                    onSelect={p => onSelect(p)}
+                    selectedPath={selectedPath}
+                    configId={connection.config_id}
+                  />
+                ))}
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
