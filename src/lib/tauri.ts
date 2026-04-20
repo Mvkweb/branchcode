@@ -114,6 +114,10 @@ export async function listDirectory(path: string): Promise<Record<string, unknow
   return invoke('list_directory', { path });
 }
 
+export async function listLocalDirectory(path: string): Promise<Record<string, unknown>> {
+  return invoke('list_local_directory', { path });
+}
+
 export async function findFiles(query: string): Promise<string[]> {
   return invoke('find_files', { query });
 }

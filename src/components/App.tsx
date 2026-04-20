@@ -36,6 +36,7 @@ import UpdateModal from './UpdateModal';
 import { ChatMessages, MessagePlaceholder } from './ChatMessages';
 import { GitPanel } from './GitPanel';
 import { TerminalPanel } from './TerminalPanel';
+import { TopBar } from './TopBar';
 import { useVirtualMessages } from '../hooks/useVirtualScroll';
 import { getConfig, setModel, getModelInfo, getProviders, getAvailableModels, type ConfigInfo, type ProviderInfo } from '../lib/tauri';
 
@@ -730,7 +731,7 @@ export default function App() {
   const suppressAutoLoadSessionRef = useRef<string | null>(null);
 
   const { messages, isStreaming, isLoading, status, send, loadMessages, clearMessages, getSessionUsage } = useChat();
-  const { sessions, activeSessionId, createSession, deleteSession, selectSession } =
+  const { sessions, activeSessionId, createSession, deleteSession, selectSession, renameSessionLocal } =
     useSessions();
   const { files, loadDirectory } = useFileTree();
   const remoteFileTree = useRemoteFileTree();
@@ -1230,6 +1231,19 @@ export default function App() {
             </>
           ) : (
             <>
+              {/* ── Top Bar ── */}
+              <TopBar
+                title={sessions.find(s => s.id === activeSessionId)?.title || 'New Chat'}
+                projectDir={config?.project_dir}
+                sshConnections={ssh.connections}
+                onTitleChange={(newTitle) => {
+                  if (activeSessionId) {
+                    renameSessionLocal(activeSessionId, newTitle);
+                  }
+                }}
+                gitStatus={git.status}
+              />
+
               {/* ── Chat ── */}
               <VirtualizedChat messages={messages} messagesEndRef={messagesEndRef} isLoading={isLoading} />
 

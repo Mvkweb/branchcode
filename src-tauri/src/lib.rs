@@ -134,6 +134,61 @@ async fn list_directory(
 }
 
 #[tauri::command]
+async fn list_local_directory(path: String) -> Result<serde_json::Value, String> {
+    use std::fs;
+    use std::path::Path;
+
+    let dir_path = if path == "." || path.is_empty() {
+        std::env::current_dir()
+            .map_err(|e| format!("Failed to get current directory: {}", e))?
+    } else {
+        let p = Path::new(&path);
+        if p.is_relative() {
+            std::env::current_dir()
+                .map_err(|e| format!("Failed to get current directory: {}", e))?
+                .join(p)
+        } else {
+            p.to_path_buf()
+        }
+    };
+
+    if !dir_path.exists() {
+        return Err(format!("Path does not exist: {}", dir_path.display()));
+    }
+    if !dir_path.is_dir() {
+        return Err(format!("Path is not a directory: {}", dir_path.display()));
+    }
+
+    fn strip_extended_prefix(path: &std::path::Path) -> String {
+        let s = path.to_string_lossy();
+        if s.starts_with("\\\\?\\") {
+            s[4..].to_string()
+        } else {
+            s.to_string()
+        }
+    }
+
+    let entries: Vec<serde_json::Value> = fs::read_dir(&dir_path)
+        .map_err(|e| format!("Failed to read directory: {}", e))?
+        .filter_map(|entry| {
+            entry.ok().map(|e| {
+                let file_path = e.path();
+                let name = e.file_name().to_string_lossy().to_string();
+                let is_dir = file_path.is_dir();
+                serde_json::json!({
+                    "name": name,
+                    "path": strip_extended_prefix(&file_path),
+                    "is_dir": is_dir,
+                    "type": if is_dir { "directory" } else { "file" }
+                })
+            })
+        })
+        .collect();
+
+    Ok(serde_json::json!({ "children": entries }))
+}
+
+#[tauri::command]
 async fn find_files(
     query: String,
     state: State<'_, AppState>,
@@ -344,6 +399,7 @@ pub fn run() {
             send_message,
             read_file,
             list_directory,
+            list_local_directory,
             find_files,
             get_model_info,
             get_providers,

@@ -57,6 +57,12 @@ export function useSessions() {
     setActiveSessionId(sessionId);
   }, []);
 
+  const renameSessionLocal = useCallback((sessionId: string, newTitle: string) => {
+    setSessions((prev) =>
+      prev.map((s) => (s.id === sessionId ? { ...s, title: newTitle } : s))
+    );
+  }, []);
+
   return {
     sessions,
     activeSessionId,
@@ -65,5 +71,6 @@ export function useSessions() {
     deleteSession,
     selectSession,
     loadSessions,
+    renameSessionLocal,
   };
 }
