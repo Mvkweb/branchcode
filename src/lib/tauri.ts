@@ -265,6 +265,9 @@ export interface SshServerConfig {
   username: string;
   auth_method: SshAuthMethod;
   default_directory?: string;
+  group?: string;
+  tags?: string[];
+  os?: string;
 }
 
 export type SshAuthMethod =
@@ -276,6 +279,7 @@ export interface SshConnectionInfo {
   server_name: string;
   connected: boolean;
   remote_opencode_ready: boolean;
+  os?: string;
 }
 
 export interface SftpFileEntry {

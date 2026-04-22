@@ -22,6 +22,9 @@ pub struct SshServerConfig {
     pub username: String,
     pub auth_method: AuthMethodConfig,
     pub default_directory: Option<String>,
+    pub group: Option<String>,
+    pub tags: Option<Vec<String>>,
+    pub os: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +47,7 @@ pub struct SshConnectionInfo {
     pub server_name: String,
     pub connected: bool,
     pub remote_opencode_ready: bool,
+    pub os: Option<String>,
 }
 
 // ── SFTP file entry ───────────────────────────────────────────────────────────
@@ -254,6 +258,7 @@ impl SshManager {
             server_name: config.name.clone(),
             connected: true,
             remote_opencode_ready: false,
+            os: config.os.clone(),
         };
 
         self.connections.insert(config.id, conn);
@@ -287,11 +292,17 @@ impl SshManager {
     pub fn get_connections(&self) -> Vec<SshConnectionInfo> {
         self.connections
             .values()
-            .map(|c| SshConnectionInfo {
-                config_id: c.config_id.clone(),
-                server_name: c.server_name.clone(),
-                connected: true,
-                remote_opencode_ready: c.remote_opencode_port.is_some(),
+            .map(|c| {
+                let os = self.configs.iter()
+                    .find(|cfg| cfg.id == c.config_id)
+                    .and_then(|cfg| cfg.os.clone());
+                SshConnectionInfo {
+                    config_id: c.config_id.clone(),
+                    server_name: c.server_name.clone(),
+                    connected: true,
+                    remote_opencode_ready: c.remote_opencode_port.is_some(),
+                    os,
+                }
             })
             .collect()
     }

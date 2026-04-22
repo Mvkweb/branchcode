@@ -6,10 +6,10 @@ import {
   Search,
   HardDrive,
   AlertCircle,
-  Command
+  Command,
 } from 'lucide-react';
 import { listLocalDirectory, sshListDir, type SshConnectionInfo } from '../lib/tauri';
-import { OsIcon } from './ssh/OsIcons';
+import { OsIcon, OS_OPTIONS, type OsType } from './ssh/OsIcons';
 
 interface DirectoryPickerModalProps {
   isOpen: boolean;
@@ -28,7 +28,12 @@ interface FileItem {
 const easeOut = [0.16, 1, 0.3, 1] as const;
 const easeSnap = [0.32, 0.72, 0, 1] as const;
 
-const Kbd: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
+/* ── Helpers ─────────────────────────────────────────────────────────── */
+
+const Kbd: React.FC<{ children: React.ReactNode; className?: string }> = ({
+  children,
+  className = '',
+}) => (
   <kbd
     className={`
       inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5
@@ -53,24 +58,43 @@ const DirectoryIcon: React.FC<{ selected?: boolean; className?: string }> = ({
     width="16"
     height="16"
     viewBox="0 0 24 24"
-    className={`${selected ? 'text-[#F1E8D8]' : 'text-[#AA9A7B]'} transition-all duration-200 ${className}`}
+    className={`shrink-0 transition-colors duration-200 ${selected ? 'text-[#D4C5A9]' : 'text-[#7A6F5B]'} ${className}`}
     aria-hidden="true"
   >
     <path
       fill="currentColor"
-      opacity={selected ? 0.95 : 0.45}
-      d="M22 14v-2.202c0-2.632 0-3.949-.77-4.804a3 3 0 0 0-.224-.225C20.151 6 18.834 6 16.202 6h-.374c-1.153 0-1.73 0-2.268-.153a4 4 0 0 1-.848-.352C12.224 5.224 11.816 4.815 11 4l-.55-.55c-.274-.274-.41-.41-.554-.53a4 4 0 0 0-2.18-.903C7.53 2 7.336 2 6.95 2c-.883 0-1.324 0-1.692.07A4 4 0 0 0 2.07 5.257C2 5.626 2 6.068 2 6.95V14c0 3.771 0 5.657 1.172 6.828S6.229 22 10 22h4c3.771 0 5.657 0 6.828-1.172S22 17.771 22 14"
-    />
-    <path
-      fill="currentColor"
-      d="M9.25 13a.75.75 0 0 1 .75-.75h4a.75.75 0 0 1 0 1.5h-4a.75.75 0 0 1-.75-.75"
+      fillRule="evenodd"
+      d="M2.07 5.258C2 5.626 2 6.068 2 6.95V14c0 3.771 0 5.657 1.172 6.828S6.229 22 10 22h4c3.771 0 5.657 0 6.828-1.172S22 17.771 22 14v-2.202c0-2.632 0-3.949-.77-4.804a3 3 0 0 0-.224-.225C20.151 6 18.834 6 16.202 6h-.374c-1.153 0-1.73 0-2.268-.153a4 4 0 0 1-.848-.352C12.224 5.224 11.816 4.815 11 4l-.55-.55c-.274-.274-.41-.41-.554-.53a4 4 0 0 0-2.18-.903C7.53 2 7.336 2 6.95 2c-.883 0-1.324 0-1.692.07A4 4 0 0 0 2.07 5.257M9.25 13a.75.75 0 0 1 .75-.75h4a.75.75 0 0 1 0 1.5h-4a.75.75 0 0 1-.75-.75"
+      clipRule="evenodd"
     />
   </svg>
 );
 
-function getLinuxVisuals(conn: SshConnectionInfo) {
+function getOsVisuals(conn: SshConnectionInfo): { os: OsType; tint: string } {
+  const validIds = new Set(OS_OPTIONS.map((o) => o.id));
+  const savedOs = (conn as any)?.os as OsType | undefined | null;
+  if (savedOs && validIds.has(savedOs)) {
+    const tintMap: Record<OsType, string> = {
+      linux: '#D5D9E0',
+      ubuntu: '#E95420',
+      debian: '#D70A53',
+      raspberrypi: '#C51A4A',
+      fedora: '#51A2DA',
+      redhat: '#EE0000',
+      nixos: '#7EBAE4',
+      gentoo: '#54487A',
+      freebsd: '#AB2B28',
+      arch: '#1793D1',
+      alpine: '#2D9CDB',
+      mint: '#87CF3E',
+      kali: '#367BF0',
+      macos: '#A2AAAD',
+      windows: '#00A4EF',
+    };
+    return { os: savedOs, tint: tintMap[savedOs] || '#D5D9E0' };
+  }
+
   const raw = [
-    (conn as any)?.os,
     (conn as any)?.distro,
     (conn as any)?.distribution,
     (conn as any)?.platform,
@@ -80,17 +104,28 @@ function getLinuxVisuals(conn: SshConnectionInfo) {
     .join(' ')
     .toLowerCase();
 
-  if (raw.includes('ubuntu')) return { osName: 'ubuntu', tint: '#E95420' };
-  if (raw.includes('debian')) return { osName: 'debian', tint: '#D70A53' };
-  if (raw.includes('arch')) return { osName: 'arch', tint: '#1793D1' };
-  if (raw.includes('fedora')) return { osName: 'fedora', tint: '#51A2DA' };
-  if (raw.includes('centos') || raw.includes('rhel') || raw.includes('rocky') || raw.includes('alma')) return { osName: 'linux', tint: '#8B5CF6' };
-  if (raw.includes('opensuse') || raw.includes('suse')) return { osName: 'linux', tint: '#73BA25' };
-  if (raw.includes('alpine')) return { osName: 'linux', tint: '#2D9CDB' };
-  if (raw.includes('nixos')) return { osName: 'linux', tint: '#7EBAE4' };
+  if (raw.includes('debian')) return { os: 'debian', tint: '#D70A53' };
+  if (raw.includes('arch')) return { os: 'arch', tint: '#1793D1' };
+  if (raw.includes('alpine')) return { os: 'alpine', tint: '#2D9CDB' };
+  if (raw.includes('mint')) return { os: 'mint', tint: '#87CF3E' };
+  if (raw.includes('kali')) return { os: 'kali', tint: '#367BF0' };
+  if (raw.includes('darwin') || raw.includes('macos')) return { os: 'macos', tint: '#A2AAAD' };
+  if (raw.includes('windows') || raw.includes('win32')) return { os: 'windows', tint: '#00A4EF' };
+  if (raw.includes('ubuntu')) return { os: 'ubuntu', tint: '#E95420' };
+  if (raw.includes('raspberry')) return { os: 'raspberrypi', tint: '#C51A4A' };
+  if (raw.includes('fedora')) return { os: 'fedora', tint: '#51A2DA' };
+  if (raw.includes('redhat') || raw.includes('rhel')) return { os: 'redhat', tint: '#EE0000' };
+  if (raw.includes('centos') || raw.includes('rocky') || raw.includes('alma'))
+    return { os: 'linux', tint: '#8B5CF6' };
+  if (raw.includes('opensuse') || raw.includes('suse')) return { os: 'linux', tint: '#73BA25' };
+  if (raw.includes('nixos') || raw.includes('nix')) return { os: 'nixos', tint: '#7EBAE4' };
+  if (raw.includes('gentoo')) return { os: 'gentoo', tint: '#54487A' };
+  if (raw.includes('freebsd')) return { os: 'freebsd', tint: '#AB2B28' };
 
-  return { osName: 'linux', tint: '#D5D9E0' };
+  return { os: 'linux', tint: '#D5D9E0' };
 }
+
+/* ── Component ───────────────────────────────────────────────────────── */
 
 export function DirectoryPickerModal({
   isOpen,
@@ -110,9 +145,11 @@ export function DirectoryPickerModal({
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const prevInputLength = useRef(inputValue.length);
+  const isKeyboardNav = useRef(false);
+  const hasOpenedRef = useRef(false);
 
   const activeConnection = useMemo(
-    () => sshConnections.find(c => c.config_id === activeConfigId),
+    () => sshConnections.find((c) => c.config_id === activeConfigId),
     [sshConnections, activeConfigId]
   );
 
@@ -137,10 +174,10 @@ export function DirectoryPickerModal({
       if (configId) {
         const sftpItems = await sshListDir(configId, targetPath);
         results = sftpItems
-          .filter(i => i.is_dir)
-          .map(i => ({ name: i.name, path: i.path, isDir: true }));
+          .filter((i) => i.is_dir)
+          .map((i) => ({ name: i.name, path: i.path, isDir: true }));
       } else {
-        const localItems = await listLocalDirectory(targetPath) as any;
+        const localItems = (await listLocalDirectory(targetPath)) as any;
 
         let rawEntries: any[] = [];
         if (Array.isArray(localItems)) {
@@ -152,7 +189,7 @@ export function DirectoryPickerModal({
             localItems.data?.children ||
             localItems.data?.entries ||
             localItems.files ||
-            Object.values(localItems).find(v => Array.isArray(v)) ||
+            Object.values(localItems).find((v) => Array.isArray(v)) ||
             Object.values(localItems);
         }
 
@@ -161,8 +198,11 @@ export function DirectoryPickerModal({
             if (typeof e !== 'object' || !e) return null;
             const name = e.name || e.path?.split(/[\\/]/).pop() || '';
             const isDir =
-              e.type === 'directory' || e.is_dir === true || e.isDir === true ||
-              !!e.children || (e.path && !e.path.includes('.'));
+              e.type === 'directory' ||
+              e.is_dir === true ||
+              e.isDir === true ||
+              !!e.children ||
+              (e.path && !e.path.includes('.'));
 
             if (!isDir || !name || name === '.' || name === '..') return null;
             return { name, path: e.path || '', isDir: !!isDir };
@@ -172,6 +212,7 @@ export function DirectoryPickerModal({
 
       results.sort((a, b) => a.name.localeCompare(b.name));
       setItems(results);
+      isKeyboardNav.current = true;
       setSelectedIndex(0);
       setCurrentPath(targetPath);
       setInputValue(targetPath);
@@ -193,66 +234,68 @@ export function DirectoryPickerModal({
     fetchItems(newPath, configId);
   };
 
-  const hasOpenedRef = useRef(false);
+  /* Open / focus / initial fetch */
   useEffect(() => {
     if (isOpen) {
-      if (!hasOpenedRef.current || items.length === 0) {
+      if (!hasOpenedRef.current) {
         hasOpenedRef.current = true;
         const path = initialPath || '.';
         setInputValue(path);
         prevInputLength.current = path.length;
         fetchItems(path, activeConfigId);
-        
-        // Auto-select text for rapid path replacement
+
         setTimeout(() => {
-          if (inputRef.current) {
-            inputRef.current.focus();
-            inputRef.current.select();
-          }
+          inputRef.current?.focus();
+          inputRef.current?.select();
         }, 50);
       }
     } else {
       hasOpenedRef.current = false;
     }
-  }, [isOpen, initialPath, fetchItems, activeConfigId, items.length]);
+  }, [isOpen, initialPath, fetchItems, activeConfigId]);
 
-  // Keep selected item in view
+  /* Scroll selected item into view — keyboard only */
   useEffect(() => {
-    if (!listRef.current) return;
+    if (!listRef.current || !isKeyboardNav.current) return;
     const targetEl = listRef.current.querySelector(
       `[data-select-index="${selectedIndex}"]`
     ) as HTMLElement | null;
     if (targetEl) {
-      targetEl.scrollIntoView({ block: 'nearest' });
+      targetEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
-  }, [selectedIndex, items.length]);
+    isKeyboardNav.current = false;
+  }, [selectedIndex]);
 
-  const handleItemSelect = (item: FileItem | '..') => {
-    if (item === '..') {
-      const isSSH = !!activeConfigId;
-      const isWindows = !isSSH && (currentPath.includes('\\') || /^[A-Z]:/i.test(currentPath));
-      const separator = isWindows ? '\\' : '/';
-      const parts = currentPath.split(/[\\/]/).filter(Boolean);
+  const handleItemSelect = useCallback(
+    (item: FileItem | '..') => {
+      if (item === '..') {
+        const isSSH = !!activeConfigId;
+        const isWindows =
+          !isSSH && (currentPath.includes('\\') || /^[A-Z]:/i.test(currentPath));
+        const separator = isWindows ? '\\' : '/';
+        const parts = currentPath.split(/[\\/]/).filter(Boolean);
 
-      if (parts.length > 0) {
-        parts.pop();
-        let newPath = parts.join(separator);
-        if (isWindows && newPath && /^[A-Z]:$/i.test(newPath)) {
-          newPath += '\\';
+        if (parts.length > 0) {
+          parts.pop();
+          let newPath = parts.join(separator);
+          if (isWindows && newPath && /^[A-Z]:$/i.test(newPath)) {
+            newPath += '\\';
+          }
+          const finalPath = newPath || (isSSH ? '/' : '.');
+          fetchItems(finalPath, activeConfigId);
         }
-        const finalPath = newPath || (isSSH ? '/' : '.');
-        fetchItems(finalPath, activeConfigId);
+      } else {
+        fetchItems(item.path, activeConfigId);
       }
-    } else {
-      fetchItems(item.path, activeConfigId);
-    }
-    inputRef.current?.focus();
-  };
+      inputRef.current?.focus();
+    },
+    [activeConfigId, currentPath, fetchItems]
+  );
 
-  const handleConfirm = () => {
+  const handleConfirm = useCallback(() => {
     onSelect(inputValue, activeConfigId);
     onClose();
-  };
+  }, [inputValue, activeConfigId, onSelect, onClose]);
 
   const { filteredItems, searchTerm } = useMemo(() => {
     const trimmed = inputValue;
@@ -262,7 +305,10 @@ export function DirectoryPickerModal({
     const normalizedTrimmed = trimmed.replace(/\\/g, '/').toLowerCase();
     const normalizedCurrent = currentPath.replace(/\\/g, '/').toLowerCase();
 
-    if (normalizedTrimmed.startsWith(normalizedCurrent) && trimmed.length >= currentPath.length) {
+    if (
+      normalizedTrimmed.startsWith(normalizedCurrent) &&
+      trimmed.length >= currentPath.length
+    ) {
       search = trimmed.slice(currentPath.length);
       if (search.startsWith('\\') || search.startsWith('/')) search = search.slice(1);
     } else if (!trimmed.includes('\\') && !trimmed.includes('/')) {
@@ -271,43 +317,88 @@ export function DirectoryPickerModal({
 
     if (search) {
       return {
-        filteredItems: items.filter(i => i.name.toLowerCase().includes(search.toLowerCase())),
+        filteredItems: items.filter((i) =>
+          i.name.toLowerCase().includes(search.toLowerCase())
+        ),
         searchTerm: search,
       };
     }
     return { filteredItems: items, searchTerm: '' };
   }, [items, inputValue, currentPath]);
 
-  // Auto-fetch on trailing slash addition
+  /* Global keyboard navigation when modal is open */
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleGlobalKey = (e: KeyboardEvent) => {
+      if (!listRef.current) return;
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        e.stopPropagation();
+        isKeyboardNav.current = true;
+        setSelectedIndex((prev) => Math.min(filteredItems.length, prev + (e.shiftKey ? 10 : 1)));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        e.stopPropagation();
+        isKeyboardNav.current = true;
+        setSelectedIndex((prev) => Math.max(0, prev - (e.shiftKey ? 10 : 1)));
+      } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        e.preventDefault();
+        e.stopPropagation();
+        isKeyboardNav.current = true;
+        setSelectedIndex(0);
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKey, true);
+    return () => window.removeEventListener('keydown', handleGlobalKey, true);
+  }, [isOpen, filteredItems.length]);
+
+  /* Auto-fetch when user types a trailing slash */
   useEffect(() => {
     const trimmed = inputValue;
     const isAdding = trimmed.length > prevInputLength.current;
     prevInputLength.current = trimmed.length;
 
     if (isAdding && trimmed !== currentPath && (trimmed.endsWith('\\') || trimmed.endsWith('/'))) {
-      const looksLikePath = trimmed.includes('\\') || trimmed.includes('/') || /^[A-Z]:/i.test(trimmed);
+      const looksLikePath =
+        trimmed.includes('\\') || trimmed.includes('/') || /^[A-Z]:/i.test(trimmed);
       if (looksLikePath || /^[A-Z]:\\$/i.test(trimmed)) {
         fetchItems(trimmed, activeConfigId);
       }
     }
   }, [inputValue, currentPath, fetchItems, activeConfigId]);
 
+  /* Jump to first match on search */
   useEffect(() => {
-    if (searchTerm && filteredItems.length > 0) setSelectedIndex(1);
-    else if (searchTerm && filteredItems.length === 0) setSelectedIndex(0);
+    if (searchTerm && filteredItems.length > 0) {
+      isKeyboardNav.current = true;
+      setSelectedIndex(1);
+    } else if (searchTerm && filteredItems.length === 0) {
+      isKeyboardNav.current = true;
+      setSelectedIndex(0);
+    }
   }, [searchTerm, filteredItems.length]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    isKeyboardNav.current = true;
+
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setSelectedIndex(Math.min(filteredItems.length, selectedIndex + (e.shiftKey ? 10 : 1)));
+      setSelectedIndex((prev) =>
+        Math.min(filteredItems.length, prev + (e.shiftKey ? 10 : 1))
+      );
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setSelectedIndex(Math.max(0, selectedIndex - (e.shiftKey ? 10 : 1)));
+      setSelectedIndex((prev) => Math.max(0, prev - (e.shiftKey ? 10 : 1)));
     } else if (e.key === 'Tab') {
       e.preventDefault();
       if (e.shiftKey) handleItemSelect('..');
-      else if (selectedIndex > 0 && filteredItems[selectedIndex - 1]) handleItemSelect(filteredItems[selectedIndex - 1]);
+      else if (selectedIndex > 0 && filteredItems[selectedIndex - 1])
+        handleItemSelect(filteredItems[selectedIndex - 1]);
       else handleItemSelect('..');
     } else if (e.key === 'Enter') {
       e.preventDefault();
@@ -324,9 +415,11 @@ export function DirectoryPickerModal({
         }
 
         const hasTrailingSlash = trimmed.endsWith('\\') || trimmed.endsWith('/');
-        const looksLikePath = trimmed.includes('\\') || trimmed.includes('/') || /^[A-Z]:/i.test(trimmed);
+        const looksLikePath =
+          trimmed.includes('\\') || trimmed.includes('/') || /^[A-Z]:/i.test(trimmed);
 
-        if (hasTrailingSlash && (looksLikePath || /^[A-Z]:$/i.test(trimmed))) fetchItems(trimmed.slice(0, -1), activeConfigId);
+        if (hasTrailingSlash && (looksLikePath || /^[A-Z]:$/i.test(trimmed)))
+          fetchItems(trimmed.slice(0, -1), activeConfigId);
         else if (looksLikePath) fetchItems(trimmed, activeConfigId);
       }
     } else if (e.key === 'Escape') {
@@ -357,7 +450,7 @@ export function DirectoryPickerModal({
               border border-white/[0.08] bg-[#0A0A0A]
               shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_24px_48px_-12px_rgba(0,0,0,0.8),0_12px_24px_-8px_rgba(0,0,0,0.6)]
             "
-            onClick={e => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
           >
             {/* Ambient top highlight */}
             <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/[0.12] to-transparent" />
@@ -387,9 +480,9 @@ export function DirectoryPickerModal({
                   <span className="relative z-10">Local</span>
                 </button>
 
-                {sshConnections.map(conn => {
+                {sshConnections.map((conn) => {
                   const isActive = activeConfigId === conn.config_id;
-                  const linux = getLinuxVisuals(conn);
+                  const { os, tint } = getOsVisuals(conn);
 
                   return (
                     <button
@@ -413,15 +506,15 @@ export function DirectoryPickerModal({
                       )}
 
                       <div className="relative z-10 flex items-center justify-center">
-                        <OsIcon 
-                          os={linux.osName as any} 
-                          size={13} 
-                          className="transition-all duration-200"
-                          style={{ 
-                            color: linux.tint, 
-                            opacity: isActive ? 1 : 0.7,
-                            filter: isActive ? `drop-shadow(0 0 6px ${linux.tint}40)` : 'none'
-                          }} 
+                        <OsIcon
+                          os={os}
+                          size={13}
+                          className="transition-colors duration-200"
+                          style={{
+                            color: isActive ? tint : undefined,
+                            opacity: isActive ? 1 : 0.6,
+                            filter: isActive ? `drop-shadow(0 0 6px ${tint}50)` : 'none',
+                          }}
                         />
                       </div>
 
@@ -472,7 +565,7 @@ export function DirectoryPickerModal({
                 <input
                   ref={inputRef}
                   value={inputValue}
-                  onChange={e => setInputValue(e.target.value)}
+                  onChange={(e) => setInputValue(e.target.value)}
                   onKeyDown={handleKeyDown}
                   className="
                     flex-1 bg-transparent border-none outline-none
@@ -532,7 +625,10 @@ export function DirectoryPickerModal({
                 </AnimatePresence>
               </div>
 
-              <div ref={listRef} className="relative flex-1 overflow-y-auto px-2 pb-2 custom-scrollbar">
+              <div
+                ref={listRef}
+                className="relative flex-1 overflow-y-auto px-2 pb-2 custom-scrollbar"
+              >
                 <AnimatePresence>
                   {error && (
                     <motion.div
@@ -553,7 +649,10 @@ export function DirectoryPickerModal({
                 {/* Parent */}
                 <div
                   data-select-index={0}
-                  onMouseEnter={() => setSelectedIndex(0)}
+                  onMouseEnter={() => {
+                    isKeyboardNav.current = false;
+                    setSelectedIndex(0);
+                  }}
                   onClick={() => handleItemSelect('..')}
                   className={`
                     relative mx-1 mt-0.5 mb-1 flex cursor-pointer items-center gap-3 rounded-[8px] px-3 py-2.5 scroll-my-1
@@ -578,10 +677,12 @@ export function DirectoryPickerModal({
                     className={`relative z-10 ${selectedIndex === 0 ? 'text-white' : 'text-neutral-500'}`}
                   />
                   <span className="relative z-10 text-[13px] font-medium">..</span>
-                  <span className="relative z-10 ml-auto text-[10px] font-medium text-neutral-600">parent</span>
+                  <span className="relative z-10 ml-auto text-[10px] font-medium text-neutral-600">
+                    parent
+                  </span>
                 </div>
 
-                {/* Items (Instant render, no stagger for immediate search feel) */}
+                {/* Items */}
                 {filteredItems.map((item, idx) => {
                   const index = idx + 1;
                   const isSelected = selectedIndex === index;
@@ -590,7 +691,10 @@ export function DirectoryPickerModal({
                     <div
                       key={item.path}
                       data-select-index={index}
-                      onMouseEnter={() => setSelectedIndex(index)}
+                      onMouseEnter={() => {
+                        isKeyboardNav.current = false;
+                        setSelectedIndex(index);
+                      }}
                       onClick={() => handleItemSelect(item)}
                       className={`
                         relative mx-1 flex cursor-pointer items-center gap-3 rounded-[8px] px-3 py-2.5 scroll-my-1
@@ -609,9 +713,13 @@ export function DirectoryPickerModal({
                         />
                       )}
 
-                      <DirectoryIcon selected={isSelected} className="relative z-10 shrink-0" />
+                      <DirectoryIcon selected={isSelected} className="relative z-10" />
 
-                      <span className={`relative z-10 flex-1 truncate text-[13px] ${isSelected ? 'font-medium' : ''}`}>
+                      <span
+                        className={`relative z-10 flex-1 truncate text-[13px] ${
+                          isSelected ? 'font-medium' : ''
+                        }`}
+                      >
                         {item.name}
                       </span>
                     </div>
@@ -633,7 +741,9 @@ export function DirectoryPickerModal({
                     </div>
                     <p className="text-[13px] font-medium">No results</p>
                     {searchTerm && (
-                      <p className="mt-1 text-[11px] text-neutral-600">Try a different search term</p>
+                      <p className="mt-1 text-[11px] text-neutral-600">
+                        Try a different search term
+                      </p>
                     )}
                   </motion.div>
                 )}
