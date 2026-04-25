@@ -39,6 +39,7 @@ impl OpenCodeServer {
         let process = Command::new("opencode")
             .args(["serve", "--port", &port.to_string()])
             .current_dir(work_dir)
+            .env("OPENCODE_YOLO", "true") // Auto-approve tool calls (headless API mode)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()

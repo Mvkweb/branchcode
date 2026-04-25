@@ -83,6 +83,86 @@ async fn create_session(
     ssh_config_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<opencode_client::OcSession, String> {
+    // For SSH sessions, restart server in a temp workspace BEFORE creating the session.
+    // This ensures the session ID is valid in the server that will handle SSE + prompts.
+    if let Some(ref ssh_id) = ssh_config_id {
+        if !ssh_id.is_empty() {
+            let temp_workdir = std::env::temp_dir()
+                .join("branchcode-ssh")
+                .join(ssh_id);
+            let _ = std::fs::create_dir_all(&temp_workdir);
+
+            // OpenCode requires a git repo for its file tools (write/edit).
+            // Without .git, tool calls hang indefinitely.
+            if !temp_workdir.join(".git").exists() {
+                println!("[SSH] Initializing git repo in temp workspace");
+                let _ = std::process::Command::new("git")
+                    .args(["init"])
+                    .current_dir(&temp_workdir)
+                    .output();
+                let _ = std::fs::write(
+                    temp_workdir.join(".gitignore"),
+                    ".opencode/\n*.tmp\n",
+                );
+                let _ = std::process::Command::new("git")
+                    .args(["add", "."])
+                    .current_dir(&temp_workdir)
+                    .output();
+                let _ = std::process::Command::new("git")
+                    .args(["commit", "-m", "init", "--allow-empty"])
+                    .current_dir(&temp_workdir)
+                    .output();
+            }
+
+            // Auto-approve all tool calls in the SSH workspace.
+            // Without this, OpenCode's write/edit tools wait for user approval
+            // that never comes (we're running headless via API), causing hangs.
+            let oc_config = temp_workdir.join("opencode.json");
+            if !oc_config.exists() {
+                let _ = std::fs::write(
+                    &oc_config,
+                    r#"{"permission":"allow"}"#,
+                );
+                println!("[SSH] Created opencode.json with auto-approve permissions");
+            }
+
+            let temp_str = temp_workdir.to_string_lossy().to_string();
+
+            // Atomically claim the directory to prevent concurrent restart storms.
+            // Only the first call that sees a mismatch will actually restart the server.
+            let needs_restart = {
+                let mut dir = state.project_dir.lock().unwrap();
+                if *dir == temp_str {
+                    false
+                } else {
+                    *dir = temp_str.clone(); // claim immediately
+                    true
+                }
+            };
+
+            if needs_restart {
+                println!("[SSH] Switching server to temp workspace: {}", temp_str);
+                let port = state.server_port;
+                let mut srv_guard = state.server.lock().await;
+
+                if let Some(ref mut srv) = *srv_guard {
+                    srv.stop();
+                }
+                *srv_guard = None;
+
+                match server::OpenCodeServer::force_start(port, &temp_str).await {
+                    Ok(new_server) => {
+                        println!("[SSH] Server ready in: {}", temp_str);
+                        *srv_guard = Some(new_server);
+                    }
+                    Err(e) => {
+                        return Err(format!("Failed to start SSH workspace server: {}", e));
+                    }
+                }
+            }
+        }
+    }
+
     let session = state.client.create_session(title, workdir.clone(), ssh_config_id.clone()).await?;
 
     // Store the workdir ourselves — the OpenCode server doesn't persist it
@@ -232,23 +312,62 @@ async fn send_message(
             }
         };
 
-        // Prepend remote context to the user's message
+        // The temp workspace was already set up by create_session.
+        // No server restart here — SSE connections stay alive.
+        let temp_workdir = std::env::temp_dir()
+            .join("branchcode-ssh")
+            .join(&config_id_owned);
+        let temp_str = temp_workdir.to_string_lossy().to_string();
+
+        // Enrich the message: system instructions + remote context + user message
         let enriched_message = format!(
-            "{}\n---\n\nUser message: {}",
-            remote_context, message
+            "[SYSTEM] You are connected to a remote Linux server via SSH.\n\
+             Remote project directory: {}\n\
+             IMPORTANT FILE PATH RULES:\n\
+             - When creating or editing files, ALWAYS use RELATIVE paths (e.g. \"yo.zig\", \"src/main.rs\")\n\
+             - NEVER use absolute paths (no leading /)\n\
+             - NEVER use Windows paths\n\
+             - Files you create will be automatically uploaded to the remote server\n\n\
+             {}\n---\n\n{}",
+            remote_dir, remote_context, message
         );
 
-        println!("[SSH] Sending message with remote context ({} chars)", remote_context.len());
+        println!("[SSH] Sending with {} chars of remote context", remote_context.len());
 
-        // Send through the LOCAL OpenCode server with full SSE streaming
         let _ = on_event.send(OcStreamEvent::Status {
             message: format!("{}", model),
         });
 
         let result = state
             .client
-            .send_message(&session_id, &enriched_message, &model, agent_str, None, None, &on_event)
+            .send_message(&session_id, &enriched_message, &model, agent_str, Some(&temp_str), None, &on_event)
             .await;
+
+        // After AI finishes, upload any created/modified files to the remote
+        let created_files = collect_temp_files(&temp_workdir);
+        if !created_files.is_empty() {
+            println!("[SSH] Uploading {} files to remote...", created_files.len());
+            let _ = on_event.send(OcStreamEvent::Status {
+                message: format!("Uploading {} files to remote...", created_files.len()),
+            });
+            let mut mgr = ssh_state.lock().await;
+            for (rel_path, content) in &created_files {
+                let remote_file = format!(
+                    "{}/{}",
+                    remote_dir.trim_end_matches('/'),
+                    rel_path.replace('\\', "/")
+                );
+                match mgr.sftp_write_file(&config_id_owned, &remote_file, content).await {
+                    Ok(_) => println!("[SSH] Uploaded: {}", remote_file),
+                    Err(e) => eprintln!("[SSH] Upload failed {}: {}", remote_file, e),
+                }
+            }
+            // Clean up temp files after upload
+            for (rel_path, _) in &created_files {
+                let local = temp_workdir.join(rel_path);
+                let _ = std::fs::remove_file(&local);
+            }
+        }
 
         return result.map(|_| ());
     }
@@ -263,6 +382,45 @@ async fn send_message(
         .await?;
 
     Ok(())
+}
+
+// ── SSH temp file collection ──
+
+/// Collect all user-visible files from the temp SSH workspace.
+/// Skips .opencode, hidden dirs, and hidden files.
+fn collect_temp_files(dir: &std::path::Path) -> Vec<(String, String)> {
+    let mut files = Vec::new();
+    collect_temp_inner(dir, dir, &mut files);
+    files
+}
+
+fn collect_temp_inner(
+    base: &std::path::Path,
+    dir: &std::path::Path,
+    out: &mut Vec<(String, String)>,
+) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        // Skip OpenCode internals, hidden files, and our own config
+        if name.starts_with('.') || name == "opencode.json" {
+            continue;
+        }
+        if path.is_dir() {
+            collect_temp_inner(base, &path, out);
+        } else if path.is_file() {
+            if let Ok(rel) = path.strip_prefix(base) {
+                let rel_str = rel.to_string_lossy().to_string();
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    out.push((rel_str, content));
+                }
+            }
+        }
+    }
 }
 
 // ── File commands (proxy to OpenCode server) ──

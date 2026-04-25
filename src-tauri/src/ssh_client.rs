@@ -544,9 +544,9 @@ impl SshManager {
         let mut context = String::new();
         context.push_str(&format!("## Remote project: {}\n\n", remote_path));
 
-        // Get file tree via `find` (fast, single SSH exec)
+        // Get file tree via `find` with RELATIVE paths (so the AI uses relative paths for file ops)
         let tree_cmd = format!(
-            "find {} -maxdepth 3 -not -path '*/node_modules/*' -not -path '*/.git/*' \
+            "cd '{}' && find . -maxdepth 3 -not -path '*/node_modules/*' -not -path '*/.git/*' \
              -not -path '*/target/*' -not -path '*/__pycache__/*' \
              -not -path '*/dist/*' -not -path '*/.next/*' \
              -not -path '*/.cache/*' -not -path '*/vendor/*' \
