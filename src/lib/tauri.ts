@@ -284,7 +284,6 @@ export interface SshConnectionInfo {
   config_id: string;
   server_name: string;
   connected: boolean;
-  remote_opencode_ready: boolean;
   os?: string;
 }
 
@@ -353,6 +352,3 @@ export async function sshExecCommand(configId: string, command: string): Promise
   return invoke('ssh_exec_command', { configId, command });
 }
 
-export async function sshStartRemoteOpencode(configId: string): Promise<number> {
-  return invoke('ssh_start_remote_opencode', { configId });
-}

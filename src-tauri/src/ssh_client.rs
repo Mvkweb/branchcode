@@ -46,7 +46,6 @@ pub struct SshConnectionInfo {
     pub config_id: String,
     pub server_name: String,
     pub connected: bool,
-    pub remote_opencode_ready: bool,
     pub os: Option<String>,
 }
 
@@ -97,7 +96,6 @@ struct SshConnection {
     handle: client::Handle<ClientHandler>,
     config_id: String,
     server_name: String,
-    remote_opencode_port: Option<u16>,
 }
 
 // ── Shell commands sent from the main thread to the reader task ───────────────
@@ -250,14 +248,12 @@ impl SshManager {
             handle,
             config_id: config.id.clone(),
             server_name: config.name.clone(),
-            remote_opencode_port: None,
         };
 
         let info = SshConnectionInfo {
             config_id: config.id.clone(),
             server_name: config.name.clone(),
             connected: true,
-            remote_opencode_ready: false,
             os: config.os.clone(),
         };
 
@@ -300,7 +296,6 @@ impl SshManager {
                     config_id: c.config_id.clone(),
                     server_name: c.server_name.clone(),
                     connected: true,
-                    remote_opencode_ready: c.remote_opencode_port.is_some(),
                     os,
                 }
             })
@@ -510,7 +505,7 @@ impl SshManager {
         }
     }
 
-    // ── Remote OpenCode ───────────────────────────────────────────────────────
+    // ── Remote Commands ───────────────────────────────────────────────────────
 
     pub async fn exec_command(&mut self, config_id: &str, cmd: &str) -> Result<String> {
         let conn = self
@@ -536,56 +531,105 @@ impl SshManager {
         Ok(String::from_utf8_lossy(&output).to_string())
     }
 
-    pub async fn start_remote_opencode(&mut self, config_id: &str) -> Result<u16> {
-        // Check if opencode is available
-        let which_output = self.exec_command(config_id, "which opencode 2>/dev/null || echo NOT_FOUND").await?;
-        if which_output.trim() == "NOT_FOUND" || which_output.trim().is_empty() {
-            return Err(anyhow!(
-                "opencode is not installed on the remote server. Please install it first."
-            ));
+    // ── Remote Context (no file downloads) ─────────────────────────────────────
+
+    /// Gather context about a remote directory via SSH for the AI.
+    /// Returns a string with the file tree and contents of key config/source files.
+    /// Nothing is downloaded to disk — everything stays in memory as prompt context.
+    pub async fn gather_remote_context(
+        &mut self,
+        config_id: &str,
+        remote_path: &str,
+    ) -> Result<String> {
+        let mut context = String::new();
+        context.push_str(&format!("## Remote project: {}\n\n", remote_path));
+
+        // Get file tree via `find` (fast, single SSH exec)
+        let tree_cmd = format!(
+            "find {} -maxdepth 3 -not -path '*/node_modules/*' -not -path '*/.git/*' \
+             -not -path '*/target/*' -not -path '*/__pycache__/*' \
+             -not -path '*/dist/*' -not -path '*/.next/*' \
+             -not -path '*/.cache/*' -not -path '*/vendor/*' \
+             -not -path '*/logs/*' -not -path '*/crash-reports/*' \
+             -not -path '*/libraries/*' -not -path '*/versions/*' \
+             -not -path '*/mods/*' -not -path '*/world/*' \
+             -not -path '*/saves/*' -not -path '*/structures/*' \
+             2>/dev/null | head -500",
+            remote_path
+        );
+
+        match self.exec_command(config_id, &tree_cmd).await {
+            Ok(tree) => {
+                let tree = tree.trim();
+                if !tree.is_empty() {
+                    context.push_str("### File tree\n```\n");
+                    context.push_str(tree);
+                    context.push_str("\n```\n\n");
+                }
+            }
+            Err(e) => {
+                eprintln!("[SSH Context] Failed to get file tree: {}", e);
+            }
         }
 
-        let port: u16 = 4096;
+        // Auto-read key project files if they exist (small text configs only)
+        let key_files = [
+            "README.md", "readme.md", "README.txt",
+            "package.json", "Cargo.toml", "go.mod", "pom.xml",
+            "requirements.txt", "pyproject.toml", "setup.py",
+            "docker-compose.yml", "docker-compose.yaml", "Dockerfile",
+            ".env.example", "Makefile",
+            "server.properties", // Minecraft
+        ];
 
-        // Kill any existing opencode serve on that port
-        let _ = self
-            .exec_command(config_id, &format!("pkill -f 'opencode serve --port {}' 2>/dev/null || true", port))
-            .await;
-
-        // Start opencode serve in background
-        let _ = self
-            .exec_command(
-                config_id,
-                &format!(
-                    "nohup opencode serve --port {} > /tmp/opencode-serve.log 2>&1 &",
-                    port
-                ),
-            )
-            .await;
-
-        // Wait briefly for it to start
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
-        // Verify it's running
-        let check = self
-            .exec_command(config_id, &format!("curl -s http://127.0.0.1:{}/global/health || echo FAILED", port))
-            .await?;
-
-        if check.trim() == "FAILED" || check.trim().is_empty() {
-            return Err(anyhow!(
-                "Failed to start remote OpenCode server. Check /tmp/opencode-serve.log on the remote."
-            ));
+        let mut files_read = 0;
+        for filename in &key_files {
+            if files_read >= 5 {
+                break; // Don't overload the context
+            }
+            let file_path = format!("{}/{}", remote_path.trim_end_matches('/'), filename);
+            // Check if file exists and read it (only if <50KB)
+            let read_cmd = format!(
+                "test -f '{}' && wc -c < '{}' | tr -d ' '",
+                file_path, file_path
+            );
+            match self.exec_command(config_id, &read_cmd).await {
+                Ok(size_str) => {
+                    let size_str = size_str.trim();
+                    if size_str.is_empty() {
+                        continue; // File doesn't exist
+                    }
+                    let size: u64 = size_str.parse().unwrap_or(0);
+                    if size == 0 || size > 50_000 {
+                        continue; // Skip empty or large files
+                    }
+                    match self.exec_command(config_id, &format!("cat '{}'", file_path)).await {
+                        Ok(content) => {
+                            let content = content.trim();
+                            if !content.is_empty() {
+                                context.push_str(&format!("### {}\n```\n", filename));
+                                // Truncate very long files in context
+                                if content.len() > 3000 {
+                                    context.push_str(&content[..3000]);
+                                    context.push_str("\n... (truncated)");
+                                } else {
+                                    context.push_str(content);
+                                }
+                                context.push_str("\n```\n\n");
+                                files_read += 1;
+                                println!("[SSH Context] Read {} ({} bytes)", filename, content.len());
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                }
+                Err(_) => {}
+            }
         }
 
-        if let Some(conn) = self.connections.get_mut(config_id) {
-            conn.remote_opencode_port = Some(port);
-        }
-
-        println!("[SSH] Remote OpenCode started on port {}", port);
-        Ok(port)
+        Ok(context)
     }
 }
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn shellexpand_path(path: &str) -> PathBuf {
@@ -755,13 +799,3 @@ pub async fn ssh_exec_command(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub async fn ssh_start_remote_opencode(
-    config_id: String,
-    state: State<'_, SshState>,
-) -> Result<u16, String> {
-    let mut mgr = state.lock().await;
-    mgr.start_remote_opencode(&config_id)
-        .await
-        .map_err(|e| e.to_string())
-}

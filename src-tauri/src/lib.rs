@@ -23,8 +23,9 @@ struct AppState {
     ssh_manager: SshState,
     server: TokioMutex<Option<server::OpenCodeServer>>,
     server_port: u16,
-    /// The OpenCode server doesn't persist workdir per session, so we track it ourselves.
+    /// The OpenCode server doesn't persist workdir or ssh_config_id per session, so we track them ourselves.
     session_workdirs: Mutex<HashMap<String, String>>,
+    session_ssh_configs: Mutex<HashMap<String, String>>,
 }
 
 // ── Config commands ──
@@ -82,13 +83,21 @@ async fn create_session(
     ssh_config_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<opencode_client::OcSession, String> {
-    let session = state.client.create_session(title, workdir.clone(), ssh_config_id).await?;
+    let session = state.client.create_session(title, workdir.clone(), ssh_config_id.clone()).await?;
 
     // Store the workdir ourselves — the OpenCode server doesn't persist it
     if let Some(ref wd) = workdir {
         if !wd.is_empty() {
             println!("[Session] Storing workdir for {}: {}", session.id, wd);
             state.session_workdirs.lock().unwrap().insert(session.id.clone(), wd.clone());
+        }
+    }
+
+    // Store the ssh_config_id ourselves — the OpenCode server doesn't persist it
+    if let Some(ref ssh_id) = ssh_config_id {
+        if !ssh_id.is_empty() {
+            println!("[Session] Storing ssh_config_id for {}: {}", session.id, ssh_id);
+            state.session_ssh_configs.lock().unwrap().insert(session.id.clone(), ssh_id.clone());
         }
     }
 
@@ -137,48 +146,50 @@ async fn send_message(
     let agent_str = agent.as_deref();
 
     let session = state.client.get_session(&session_id).await?;
-    // The OpenCode server doesn't persist workdir, so fall back to our local map
+    // The OpenCode server doesn't persist workdir/ssh_config_id, so fall back to our local maps
     let workdir = session.workdir.clone().or_else(|| {
         state.session_workdirs.lock().unwrap().get(&session_id).cloned()
     });
-    let ssh_config_id = session.ssh_config_id.clone();
+    let ssh_config_id = session.ssh_config_id.clone().or_else(|| {
+        state.session_ssh_configs.lock().unwrap().get(&session_id).cloned()
+    });
 
-    // ── Restart server if the session targets a different directory ──
-    if let Some(ref wd) = workdir {
-        if !wd.is_empty() {
-            let current_dir = state.project_dir.lock().unwrap().clone();
-            if wd != &current_dir {
-                println!("[Server] Session workdir differs: {} -> {}", current_dir, wd);
-                let port = state.server_port;
+    // ── Restart server if the session targets a different LOCAL directory (not SSH) ──
+    // Only restart local server when there's NO ssh_config_id - SSH sessions use remote opencode
+    if ssh_config_id.is_none() {
+        if let Some(ref wd) = workdir {
+            if !wd.is_empty() {
+                let current_dir = state.project_dir.lock().unwrap().clone();
+                if wd != &current_dir {
+                    println!("[Server] Session workdir differs: {} -> {}", current_dir, wd);
+                    let port = state.server_port;
 
-                let mut srv_guard = state.server.lock().await;
+                    let mut srv_guard = state.server.lock().await;
 
-                // Stop the old server (kills owned process + anything on the port)
-                if let Some(ref mut srv) = *srv_guard {
-                    srv.stop();
-                }
-                *srv_guard = None;
-
-                // Force-start a new server — kills any remaining port occupants
-                match server::OpenCodeServer::force_start(port, wd).await {
-                    Ok(new_server) => {
-                        println!("[Server] Restarted in: {}", wd);
-                        *srv_guard = Some(new_server);
-                        *state.project_dir.lock().unwrap() = wd.clone();
-
-                        // Re-initialize git for the new directory
-                        let git_svc = git::GitService::new(wd.clone());
-                        if git_svc.is_git_repo() {
-                            println!("Git repository detected at {}", wd);
-                        }
-                        *state.git.lock().unwrap() = Some(git_svc);
+                    if let Some(ref mut srv) = *srv_guard {
+                        srv.stop();
                     }
-                    Err(e) => {
-                        eprintln!("[Server] Failed to restart in {}: {}", wd, e);
-                        let _ = on_event.send(OcStreamEvent::Error {
-                            message: format!("Failed to start server in {}: {}", wd, e),
-                        });
-                        return Err(format!("Failed to start server in {}: {}", wd, e));
+                    *srv_guard = None;
+
+                    match server::OpenCodeServer::force_start(port, wd).await {
+                        Ok(new_server) => {
+                            println!("[Server] Restarted in: {}", wd);
+                            *srv_guard = Some(new_server);
+                            *state.project_dir.lock().unwrap() = wd.clone();
+
+                            let git_svc = git::GitService::new(wd.clone());
+                            if git_svc.is_git_repo() {
+                                println!("Git repository detected at {}", wd);
+                            }
+                            *state.git.lock().unwrap() = Some(git_svc);
+                        }
+                        Err(e) => {
+                            eprintln!("[Server] Failed to restart in {}: {}", wd, e);
+                            let _ = on_event.send(OcStreamEvent::Error {
+                                message: format!("Failed to start server in {}: {}", wd, e),
+                            });
+                            return Err(format!("Failed to start server in {}: {}", wd, e));
+                        }
                     }
                 }
             }
@@ -188,13 +199,60 @@ async fn send_message(
     if let Some(ref config_id) = ssh_config_id {
         let ssh_state = state.ssh_manager.clone();
         let config_id_owned = config_id.clone();
-        let connect_result = ssh_state.lock().await.connect(&config_id_owned).await;
-        if let Err(e) = connect_result {
-            let _ = on_event.send(OcStreamEvent::Error {
-                message: format!("SSH connect failed: {}", e),
-            });
+
+        // Ensure SSH is connected
+        {
+            let mut mgr = ssh_state.lock().await;
+            if !mgr.is_connected(&config_id_owned) {
+                let connect_result = mgr.connect(&config_id_owned).await;
+                if let Err(e) = connect_result {
+                    let _ = on_event.send(OcStreamEvent::Error {
+                        message: format!("SSH connect failed: {}", e),
+                    });
+                    return Err(format!("SSH connect failed: {}", e));
+                }
+            }
         }
+
+        let remote_dir = workdir.clone().unwrap_or_else(|| "/".to_string());
+
+        // Gather remote context via SSH (file tree + key files) — no downloads
+        let _ = on_event.send(OcStreamEvent::Status {
+            message: "Reading remote project...".to_string(),
+        });
+
+        let remote_context = {
+            let mut mgr = ssh_state.lock().await;
+            match mgr.gather_remote_context(&config_id_owned, &remote_dir).await {
+                Ok(ctx) => ctx,
+                Err(e) => {
+                    eprintln!("[SSH] Failed to gather context: {}", e);
+                    format!("## Remote project: {}\n(Could not read file tree)\n", remote_dir)
+                }
+            }
+        };
+
+        // Prepend remote context to the user's message
+        let enriched_message = format!(
+            "{}\n---\n\nUser message: {}",
+            remote_context, message
+        );
+
+        println!("[SSH] Sending message with remote context ({} chars)", remote_context.len());
+
+        // Send through the LOCAL OpenCode server with full SSE streaming
+        let _ = on_event.send(OcStreamEvent::Status {
+            message: format!("{}", model),
+        });
+
+        let result = state
+            .client
+            .send_message(&session_id, &enriched_message, &model, agent_str, None, None, &on_event)
+            .await;
+
+        return result.map(|_| ());
     }
+
 
     let workdir_ref: Option<&str> = workdir.as_deref();
     let ssh_ref: Option<&str> = ssh_config_id.as_deref();
@@ -470,6 +528,7 @@ pub fn run() {
         server: TokioMutex::new(_server.ok()),
         server_port: port,
         session_workdirs: Mutex::new(HashMap::new()),
+        session_ssh_configs: Mutex::new(HashMap::new()),
     };
 
     tauri::Builder::default()
@@ -530,7 +589,6 @@ pub fn run() {
             ssh_client::ssh_write_shell,
             ssh_client::ssh_close_shell,
             ssh_client::ssh_exec_command,
-            ssh_client::ssh_start_remote_opencode,
             get_home_dir,
         ])
         .run(tauri::generate_context!())
