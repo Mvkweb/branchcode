@@ -11,6 +11,8 @@ use tokio::sync::oneshot;
 pub struct OcSession {
     pub id: String,
     pub title: Option<String>,
+    pub workdir: Option<String>,
+    pub ssh_config_id: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
 }
@@ -199,11 +201,38 @@ impl OpenCodeClient {
             .map_err(|e| format!("Failed to parse sessions: {}", e))
     }
 
-    pub async fn create_session(&self, title: Option<String>) -> Result<OcSession, String> {
-        let body = match title {
-            Some(t) if !t.is_empty() => serde_json::json!({ "title": t }),
-            _ => serde_json::json!({}),
-        };
+    pub async fn get_session(&self, session_id: &str) -> Result<OcSession, String> {
+        let resp = self
+            .client
+            .get(&format!("{}/session/{}", self.base_url, session_id))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to get session: {}", e))?;
+
+        resp.json()
+            .await
+            .map_err(|e| format!("Failed to parse session: {}", e))
+    }
+
+    pub async fn create_session(
+        &self,
+        title: Option<String>,
+        workdir: Option<String>,
+        ssh_config_id: Option<String>,
+    ) -> Result<OcSession, String> {
+        let mut body = serde_json::Map::new();
+        if let Some(t) = title {
+            if !t.is_empty() {
+                body.insert("title".to_string(), serde_json::Value::String(t));
+            }
+        }
+        if let Some(w) = &workdir {
+            body.insert("workdir".to_string(), serde_json::Value::String(w.clone()));
+        }
+        if let Some(s) = ssh_config_id {
+            body.insert("ssh_config_id".to_string(), serde_json::Value::String(s));
+        }
+        let body = serde_json::Value::Object(body);
 
         let resp = self
             .client
@@ -213,9 +242,16 @@ impl OpenCodeClient {
             .await
             .map_err(|e| format!("Failed to create session: {}", e))?;
 
-        resp.json()
+        let mut session: OcSession = resp
+            .json()
             .await
-            .map_err(|e| format!("Failed to parse session: {}", e))
+            .map_err(|e| format!("Failed to parse session: {}", e))?;
+
+        if session.workdir.is_none() {
+            session.workdir = workdir;
+        }
+
+        Ok(session)
     }
 
     pub async fn delete_session(&self, id: &str) -> Result<bool, String> {
@@ -263,6 +299,8 @@ impl OpenCodeClient {
         message: &str,
         model: &str,
         agent: Option<&str>,
+        workdir: Option<&str>,
+        ssh_config_id: Option<&str>,
         channel: &Channel<OcStreamEvent>,
     ) -> Result<String, String> {
         let (provider, model_id) = if let Some(pos) = model.find('/') {
@@ -285,6 +323,18 @@ impl OpenCodeClient {
         if let Some(a) = agent {
             if !a.is_empty() {
                 body["agent"] = serde_json::json!(a);
+            }
+        }
+
+        if let Some(wd) = workdir {
+            if !wd.is_empty() {
+                body["workdir"] = serde_json::json!(wd);
+            }
+        }
+
+        if let Some(ssh_id) = ssh_config_id {
+            if !ssh_id.is_empty() {
+                body["ssh_config_id"] = serde_json::json!(ssh_id);
             }
         }
 

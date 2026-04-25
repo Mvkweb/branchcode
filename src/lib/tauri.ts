@@ -14,6 +14,8 @@ export interface ConfigInfo {
 export interface Session {
   id: string;
   title: string | null;
+  workdir: string | null;
+  ssh_config_id: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -76,8 +78,12 @@ export async function getSessions(): Promise<Session[]> {
   return invoke('get_sessions');
 }
 
-export async function createSession(title?: string): Promise<Session> {
-  return invoke('create_session', { title });
+export async function createSession(title?: string, workdir?: string, sshConfigId?: string): Promise<Session> {
+  return invoke('create_session', { title, workdir, sshConfigId });
+}
+
+export async function getHomeDir(): Promise<string> {
+  return invoke('get_home_dir');
 }
 
 export async function deleteSession(sessionId: string): Promise<boolean> {

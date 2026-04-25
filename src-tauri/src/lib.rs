@@ -5,20 +5,26 @@ mod pty;
 mod updater;
 mod ssh_client;
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use tokio::sync::Mutex as TokioMutex;
 use opencode_client::OcStreamEvent;
 use pty::PtyState;
-use ssh_client::SshState;
 use serde::Serialize;
-use std::sync::{Arc, Mutex};
-use tauri::ipc::Channel;
-use tauri::State;
+use ssh_client::SshState;
+use tauri::{State, ipc::Channel};
 
 struct AppState {
     client: Arc<opencode_client::OpenCodeClient>,
-    project_dir: String,
-    model: std::sync::Mutex<String>,
-    git: std::sync::Mutex<Option<git::GitService>>,
+    project_dir: Mutex<String>,
+    model: Mutex<String>,
+    git: Mutex<Option<git::GitService>>,
     pty: PtyState,
+    ssh_manager: SshState,
+    server: TokioMutex<Option<server::OpenCodeServer>>,
+    server_port: u16,
+    /// The OpenCode server doesn't persist workdir per session, so we track it ourselves.
+    session_workdirs: Mutex<HashMap<String, String>>,
 }
 
 // ── Config commands ──
@@ -36,6 +42,7 @@ struct ConfigInfo {
 #[tauri::command]
 fn get_config(state: State<AppState>) -> ConfigInfo {
     let model = state.model.lock().unwrap().clone();
+    let project_dir = state.project_dir.lock().unwrap().clone();
     let (provider, _) = if model.contains('/') {
         let pos = model.find('/').unwrap();
         (model[..pos].to_string(), model[pos + 1..].to_string())
@@ -47,7 +54,7 @@ fn get_config(state: State<AppState>) -> ConfigInfo {
         provider,
         model,
         has_api_key: true,
-        project_dir: state.project_dir.clone(),
+        project_dir,
         server_running: true,
         server_version: None,
     }
@@ -71,9 +78,28 @@ async fn get_sessions(state: State<'_, AppState>) -> Result<Vec<opencode_client:
 #[tauri::command]
 async fn create_session(
     title: Option<String>,
+    workdir: Option<String>,
+    ssh_config_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<opencode_client::OcSession, String> {
-    state.client.create_session(title).await
+    let session = state.client.create_session(title, workdir.clone(), ssh_config_id).await?;
+
+    // Store the workdir ourselves — the OpenCode server doesn't persist it
+    if let Some(ref wd) = workdir {
+        if !wd.is_empty() {
+            println!("[Session] Storing workdir for {}: {}", session.id, wd);
+            state.session_workdirs.lock().unwrap().insert(session.id.clone(), wd.clone());
+        }
+    }
+
+    Ok(session)
+}
+
+#[tauri::command]
+fn get_home_dir() -> Result<String, String> {
+    dirs::home_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .ok_or_else(|| "Could not determine home directory".to_string())
 }
 
 #[tauri::command]
@@ -110,9 +136,72 @@ async fn send_message(
 
     let agent_str = agent.as_deref();
 
+    let session = state.client.get_session(&session_id).await?;
+    // The OpenCode server doesn't persist workdir, so fall back to our local map
+    let workdir = session.workdir.clone().or_else(|| {
+        state.session_workdirs.lock().unwrap().get(&session_id).cloned()
+    });
+    let ssh_config_id = session.ssh_config_id.clone();
+
+    // ── Restart server if the session targets a different directory ──
+    if let Some(ref wd) = workdir {
+        if !wd.is_empty() {
+            let current_dir = state.project_dir.lock().unwrap().clone();
+            if wd != &current_dir {
+                println!("[Server] Session workdir differs: {} -> {}", current_dir, wd);
+                let port = state.server_port;
+
+                let mut srv_guard = state.server.lock().await;
+
+                // Stop the old server (kills owned process + anything on the port)
+                if let Some(ref mut srv) = *srv_guard {
+                    srv.stop();
+                }
+                *srv_guard = None;
+
+                // Force-start a new server — kills any remaining port occupants
+                match server::OpenCodeServer::force_start(port, wd).await {
+                    Ok(new_server) => {
+                        println!("[Server] Restarted in: {}", wd);
+                        *srv_guard = Some(new_server);
+                        *state.project_dir.lock().unwrap() = wd.clone();
+
+                        // Re-initialize git for the new directory
+                        let git_svc = git::GitService::new(wd.clone());
+                        if git_svc.is_git_repo() {
+                            println!("Git repository detected at {}", wd);
+                        }
+                        *state.git.lock().unwrap() = Some(git_svc);
+                    }
+                    Err(e) => {
+                        eprintln!("[Server] Failed to restart in {}: {}", wd, e);
+                        let _ = on_event.send(OcStreamEvent::Error {
+                            message: format!("Failed to start server in {}: {}", wd, e),
+                        });
+                        return Err(format!("Failed to start server in {}: {}", wd, e));
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(ref config_id) = ssh_config_id {
+        let ssh_state = state.ssh_manager.clone();
+        let config_id_owned = config_id.clone();
+        let connect_result = ssh_state.lock().await.connect(&config_id_owned).await;
+        if let Err(e) = connect_result {
+            let _ = on_event.send(OcStreamEvent::Error {
+                message: format!("SSH connect failed: {}", e),
+            });
+        }
+    }
+
+    let workdir_ref: Option<&str> = workdir.as_deref();
+    let ssh_ref: Option<&str> = ssh_config_id.as_deref();
+    
     state
         .client
-        .send_message(&session_id, &message, &model, agent_str, &on_event)
+        .send_message(&session_id, &message, &model, agent_str, workdir_ref, ssh_ref, &on_event)
         .await?;
 
     Ok(())
@@ -331,14 +420,12 @@ fn get_git_diff_stats(state: State<AppState>) -> Result<Vec<git::GitFile>, Strin
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Try E:\dev\branchcode-test first, fallback to current directory
-    let project_dir = if std::path::Path::new("E:\\dev\\branchcode-test").exists() {
-        "E:\\dev\\branchcode-test".to_string()
-    } else {
-        std::env::current_dir()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| ".".to_string())
-    };
+    // Use the current working directory as the default project dir.
+    // Per-session workdirs are passed via the OpenCode API request body,
+    // so this only serves as the fallback when no session workdir is set.
+    let project_dir = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| ".".to_string());
 
     println!("Project directory: {}", project_dir);
 
@@ -375,10 +462,14 @@ pub fn run() {
 
     let state = AppState {
         client,
-        project_dir,
-        model: std::sync::Mutex::new(String::new()),
-        git: std::sync::Mutex::new(Some(git_service)),
+        project_dir: Mutex::new(project_dir),
+        model: Mutex::new(String::new()),
+        git: Mutex::new(Some(git_service)),
         pty: Arc::new(Mutex::new(pty::PtyManager::new())),
+        ssh_manager: ssh_state.clone(),
+        server: TokioMutex::new(_server.ok()),
+        server_port: port,
+        session_workdirs: Mutex::new(HashMap::new()),
     };
 
     tauri::Builder::default()
@@ -440,6 +531,7 @@ pub fn run() {
             ssh_client::ssh_close_shell,
             ssh_client::ssh_exec_command,
             ssh_client::ssh_start_remote_opencode,
+            get_home_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

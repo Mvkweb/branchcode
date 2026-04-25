@@ -26,9 +26,9 @@ export function useSessions() {
     loadSessions();
   }, [loadSessions]);
 
-  const createSession = useCallback(async (title?: string) => {
+  const createSession = useCallback(async (title?: string, workdir?: string, sshConfigId?: string) => {
     try {
-      const session = await tauriCreateSession(title);
+      const session = await tauriCreateSession(title, workdir, sshConfigId);
       setSessions((prev) => [session, ...prev]);
       setActiveSessionId(session.id);
       return session;

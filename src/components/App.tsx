@@ -38,7 +38,8 @@ import { GitPanel } from './GitPanel';
 import { TerminalPanel } from './TerminalPanel';
 import { TopBar } from './TopBar';
 import { useVirtualMessages } from '../hooks/useVirtualScroll';
-import { getConfig, setModel, getModelInfo, getProviders, getAvailableModels, type ConfigInfo, type ProviderInfo } from '../lib/tauri';
+import { getConfig, setModel, getModelInfo, getProviders, getAvailableModels, sshListServers, type ConfigInfo, type ProviderInfo, type SshServerConfig } from '../lib/tauri';
+import { DirectoryPickerModal, type SessionSource } from './DirectoryPickerModal';
 
 // ── Logo ──
 
@@ -723,6 +724,11 @@ export default function App() {
   const[showSettings, setShowSettings] = useState(false);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [appMode, setAppMode] = useState<'plan' | 'build'>('build');
+  
+  // Session source for working directory
+  const [sessionSource, setSessionSource] = useState<SessionSource | null>(null);
+  const [showDirectoryPicker, setShowDirectoryPicker] = useState(false);
+  const [savedSshServers, setSavedSshServers] = useState<SshServerConfig[]>([]);
 
   const isVisible = isPinned || isHovered;
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -754,6 +760,13 @@ export default function App() {
   useEffect(() => {
     loadConfig();
   }, [loadConfig]);
+  
+  // Load SSH servers
+  useEffect(() => {
+    sshListServers()
+      .then(setSavedSshServers)
+      .catch(console.error);
+  }, []);
 
   const findContextLimit = useCallback((modelId: string): number => {
     const pCache = providersCache;
@@ -845,7 +858,12 @@ export default function App() {
     let sessionId = activeSessionId;
 
     if (!sessionId) {
-      const session = await createSession(text.slice(0, 50));
+      // Pass workdir and sshConfigId from directory picker selection
+      const session = await createSession(
+        text.slice(0, 50),
+        sessionSource?.path,
+        sessionSource?.configId,
+      );
       if (!session) return;
 
       sessionId = session.id;
@@ -854,7 +872,7 @@ export default function App() {
 
     await send(sessionId, text, appMode);
     setInput('');
-  },[input, isStreaming, config?.model, activeSessionId, createSession, send, appMode]);
+  },[input, isStreaming, config?.model, activeSessionId, createSession, send, appMode, sessionSource]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -864,8 +882,17 @@ export default function App() {
   };
 
   const handleNewChat = async () => {
-    await createSession();
     clearMessages();
+    setSessionSource(null);
+    selectSession('');  // Clear active session so handleSend creates a new one
+    setShowDirectoryPicker(true);
+  };
+  
+  const handleDirectorySelect = async (path: string, configId?: string) => {
+    // Don't create a session yet — just remember the source so handleSend
+    // can pass it when the user actually sends their first message.
+    setSessionSource({ path, configId });
+    setShowDirectoryPicker(false);
   };
 
   // ── Drag & Resize Logic for Terminal Panel ──
@@ -1415,6 +1442,16 @@ export default function App() {
           />
         </div>
       </motion.div>
+      
+      {/* ── Directory Picker Modal for New Session ── */}
+      <DirectoryPickerModal
+        isOpen={showDirectoryPicker}
+        onClose={() => setShowDirectoryPicker(false)}
+        onSelect={handleDirectorySelect}
+        initialMode={sessionSource?.configId ? 'ssh' : 'local'}
+        sshConnections={ssh.connections}
+        savedSshServers={savedSshServers}
+      />
     </div>
   );
 }

@@ -8,7 +8,7 @@ import {
   AlertCircle,
   Command,
 } from 'lucide-react';
-import { listLocalDirectory, sshListDir, type SshConnectionInfo } from '../lib/tauri';
+import { listLocalDirectory, sshListDir, sshConnect, sshDisconnect, type SshConnectionInfo, type SshServerConfig, getHomeDir } from '../lib/tauri';
 import { OsIcon, OS_OPTIONS, type OsType } from './ssh/OsIcons';
 
 interface DirectoryPickerModalProps {
@@ -17,6 +17,8 @@ interface DirectoryPickerModalProps {
   onSelect: (path: string, configId?: string) => void;
   initialPath?: string;
   sshConnections?: SshConnectionInfo[];
+  savedSshServers?: SshServerConfig[];
+  initialMode?: 'local' | 'ssh';
 }
 
 interface FileItem {
@@ -74,55 +76,36 @@ function getOsVisuals(conn: SshConnectionInfo): { os: OsType; tint: string } {
   const validIds = new Set(OS_OPTIONS.map((o) => o.id));
   const savedOs = (conn as any)?.os as OsType | undefined | null;
   if (savedOs && validIds.has(savedOs)) {
-    const tintMap: Record<OsType, string> = {
-      linux: '#D5D9E0',
-      ubuntu: '#E95420',
-      debian: '#D70A53',
-      raspberrypi: '#C51A4A',
-      fedora: '#51A2DA',
-      redhat: '#EE0000',
-      nixos: '#7EBAE4',
-      gentoo: '#54487A',
-      freebsd: '#AB2B28',
-      arch: '#1793D1',
-      alpine: '#2D9CDB',
-      mint: '#87CF3E',
-      kali: '#367BF0',
-      macos: '#A2AAAD',
-      windows: '#00A4EF',
-    };
-    return { os: savedOs, tint: tintMap[savedOs] || '#D5D9E0' };
+    return getOsVisualsFromOsType(savedOs);
   }
+  const osFromName = 'linux';
+  return getOsVisualsFromOsType(osFromName);
+}
 
-  const raw = [
-    (conn as any)?.distro,
-    (conn as any)?.distribution,
-    (conn as any)?.platform,
-    (conn as any)?.server_name,
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
+function getOsVisualsFromOsType(os: OsType): { os: OsType; tint: string } {
+  const tintMap: Record<OsType, string> = {
+    linux: '#D5D9E0',
+    ubuntu: '#E95420',
+    debian: '#D70A53',
+    raspberrypi: '#C51A4A',
+    fedora: '#51A2DA',
+    redhat: '#EE0000',
+    nixos: '#7EBAE4',
+    gentoo: '#54487A',
+    freebsd: '#AB2B28',
+    arch: '#1793D1',
+    alpine: '#2D9CDB',
+    mint: '#87CF3E',
+    kali: '#367BF0',
+    macos: '#A2AAAD',
+    windows: '#00A4EF',
+  };
+  return { os, tint: tintMap[os] || '#D5D9E0' };
+}
 
-  if (raw.includes('debian')) return { os: 'debian', tint: '#D70A53' };
-  if (raw.includes('arch')) return { os: 'arch', tint: '#1793D1' };
-  if (raw.includes('alpine')) return { os: 'alpine', tint: '#2D9CDB' };
-  if (raw.includes('mint')) return { os: 'mint', tint: '#87CF3E' };
-  if (raw.includes('kali')) return { os: 'kali', tint: '#367BF0' };
-  if (raw.includes('darwin') || raw.includes('macos')) return { os: 'macos', tint: '#A2AAAD' };
-  if (raw.includes('windows') || raw.includes('win32')) return { os: 'windows', tint: '#00A4EF' };
-  if (raw.includes('ubuntu')) return { os: 'ubuntu', tint: '#E95420' };
-  if (raw.includes('raspberry')) return { os: 'raspberrypi', tint: '#C51A4A' };
-  if (raw.includes('fedora')) return { os: 'fedora', tint: '#51A2DA' };
-  if (raw.includes('redhat') || raw.includes('rhel')) return { os: 'redhat', tint: '#EE0000' };
-  if (raw.includes('centos') || raw.includes('rocky') || raw.includes('alma'))
-    return { os: 'linux', tint: '#8B5CF6' };
-  if (raw.includes('opensuse') || raw.includes('suse')) return { os: 'linux', tint: '#73BA25' };
-  if (raw.includes('nixos') || raw.includes('nix')) return { os: 'nixos', tint: '#7EBAE4' };
-  if (raw.includes('gentoo')) return { os: 'gentoo', tint: '#54487A' };
-  if (raw.includes('freebsd')) return { os: 'freebsd', tint: '#AB2B28' };
-
-  return { os: 'linux', tint: '#D5D9E0' };
+export interface SessionSource {
+  path: string;
+  configId?: string;
 }
 
 /* ── Component ───────────────────────────────────────────────────────── */
@@ -133,14 +116,40 @@ export function DirectoryPickerModal({
   onSelect,
   initialPath = '.',
   sshConnections = [],
+  savedSshServers = [],
+  initialMode = 'local',
 }: DirectoryPickerModalProps) {
   const [activeConfigId, setActiveConfigId] = useState<string | undefined>(undefined);
+  const [connectingId, setConnectingId] = useState<string | null>(null);
   const [currentPath, setCurrentPath] = useState(initialPath || '.');
   const [inputValue, setInputValue] = useState(initialPath || '.');
   const [items, setItems] = useState<FileItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [homeDir, setHomeDir] = useState<string>('~');
+
+  useEffect(() => {
+    if (isOpen && !hasOpenedRef.current) {
+      hasOpenedRef.current = true;
+      getHomeDir().then((home) => {
+        setHomeDir(home);
+        const firstServer = savedSshServers[0];
+        const isSSH = initialMode === 'ssh' && !!firstServer;
+        const initial = isSSH && firstServer ? (firstServer.default_directory || '/') : home;
+        fetchItems(initial, activeConfigId);
+        setCurrentPath(initial);
+        setInputValue(initial);
+      }).catch(() => {
+        const firstServer = savedSshServers[0];
+        const isSSH = initialMode === 'ssh' && !!firstServer;
+        const fallback = isSSH && firstServer ? (firstServer.default_directory || '/') : '.';
+        fetchItems(fallback, activeConfigId);
+        setCurrentPath(fallback);
+        setInputValue(fallback);
+      });
+    }
+  }, [isOpen]);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -149,8 +158,8 @@ export function DirectoryPickerModal({
   const hasOpenedRef = useRef(false);
 
   const activeConnection = useMemo(
-    () => sshConnections.find((c) => c.config_id === activeConfigId),
-    [sshConnections, activeConfigId]
+    () => savedSshServers.find((s) => s.id === activeConfigId),
+    [savedSshServers, activeConfigId]
   );
 
   const normalizePath = (path: string, isSSH: boolean) => {
@@ -227,22 +236,54 @@ export function DirectoryPickerModal({
     }
   }, []);
 
-  const handleContextSwitch = (configId: string | undefined) => {
+  const handleContextSwitch = async (configId: string | undefined) => {
     if (configId === activeConfigId) return;
+    
+    if (configId) {
+      setConnectingId(configId);
+      try {
+        await sshConnect(configId);
+      } catch (e) {
+        console.error('Failed to connect:', e);
+        setConnectingId(null);
+        return;
+      }
+    }
+    
     setActiveConfigId(configId);
+    setConnectingId(null);
     const newPath = configId ? '/' : initialPath;
     fetchItems(newPath, configId);
   };
+
+  const disconnectIfNeeded = useCallback(async () => {
+    if (connectingId) {
+      try {
+        await sshDisconnect(connectingId);
+      } catch {}
+      setConnectingId(null);
+    }
+  }, [connectingId]);
 
   /* Open / focus / initial fetch */
   useEffect(() => {
     if (isOpen) {
       if (!hasOpenedRef.current) {
         hasOpenedRef.current = true;
+
+        let startConfigId = activeConfigId;
+        if (initialMode === 'ssh' && !startConfigId && savedSshServers.length > 0) {
+          startConfigId = savedSshServers[0]?.id;
+          setActiveConfigId(startConfigId);
+        } else if (initialMode === 'local' && startConfigId) {
+          startConfigId = undefined;
+          setActiveConfigId(undefined);
+        }
+
         const path = initialPath || '.';
         setInputValue(path);
         prevInputLength.current = path.length;
-        fetchItems(path, activeConfigId);
+        fetchItems(path, startConfigId);
 
         setTimeout(() => {
           inputRef.current?.focus();
@@ -252,7 +293,7 @@ export function DirectoryPickerModal({
     } else {
       hasOpenedRef.current = false;
     }
-  }, [isOpen, initialPath, fetchItems, activeConfigId]);
+  }, [isOpen, initialPath, fetchItems, activeConfigId, initialMode, savedSshServers]);
 
   /* Scroll selected item into view — keyboard only */
   useEffect(() => {
@@ -480,14 +521,14 @@ export function DirectoryPickerModal({
                   <span className="relative z-10">Local</span>
                 </button>
 
-                {sshConnections.map((conn) => {
-                  const isActive = activeConfigId === conn.config_id;
-                  const { os, tint } = getOsVisuals(conn);
+                {savedSshServers.map((server) => {
+                  const isActive = activeConfigId === server.id;
+                  const { os, tint } = getOsVisualsFromOsType(server.os as OsType);
 
                   return (
                     <button
-                      key={conn.config_id}
-                      onClick={() => handleContextSwitch(conn.config_id)}
+                      key={server.id}
+                      onClick={() => handleContextSwitch(server.id)}
                       className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-[5px] text-[12px] font-medium transition-colors duration-150 z-10 ${
                         isActive ? 'text-white' : 'text-neutral-500 hover:text-neutral-300'
                       }`}
@@ -518,7 +559,7 @@ export function DirectoryPickerModal({
                         />
                       </div>
 
-                      <span className="relative z-10">{conn.server_name}</span>
+                      <span className="relative z-10">{server.name}</span>
                     </button>
                   );
                 })}
@@ -527,7 +568,7 @@ export function DirectoryPickerModal({
               <AnimatePresence mode="wait">
                 {activeConnection && (
                   <motion.div
-                    key={activeConnection.config_id}
+                    key={activeConnection.id}
                     initial={{ opacity: 0, x: 4 }}
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: 4 }}
@@ -607,7 +648,7 @@ export function DirectoryPickerModal({
                     className="flex items-center gap-2"
                   >
                     <span className="text-[10px] font-medium uppercase tracking-wider text-neutral-500">
-                      {activeConnection ? activeConnection.server_name : 'Local Machine'}
+                      {activeConnection ? activeConnection.name : 'Local Machine'}
                     </span>
                     <span className="text-[10px] text-neutral-700">•</span>
                     <span className="text-[10px] font-medium text-neutral-500">
@@ -617,7 +658,7 @@ export function DirectoryPickerModal({
                       <>
                         <span className="text-[10px] text-neutral-700">•</span>
                         <span className="text-[10px] font-medium text-neutral-400">
-                          “{searchTerm}”
+                          "{searchTerm}"
                         </span>
                       </>
                     )}
