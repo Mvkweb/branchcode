@@ -293,6 +293,23 @@ impl OpenCodeClient {
         Ok(messages.into_iter().map(OcMessageResponse::normalize).collect())
     }
 
+    /// Rewrite a local temp path to the remote display path.
+    fn rewrite_path(path: &str, rewrite: &Option<(String, String)>) -> String {
+        if let Some((from, to)) = rewrite {
+            // Handle both forward and backslash variants
+            let normalized = path.replace('\\', "/");
+            let from_normalized = from.replace('\\', "/");
+            if normalized.starts_with(&from_normalized) {
+                let rel = normalized[from_normalized.len()..].trim_start_matches('/');
+                if rel.is_empty() {
+                    return to.clone();
+                }
+                return format!("{}/{}", to.trim_end_matches('/'), rel);
+            }
+        }
+        path.to_string()
+    }
+
     pub async fn send_message(
         &self,
         session_id: &str,
@@ -302,6 +319,7 @@ impl OpenCodeClient {
         workdir: Option<&str>,
         ssh_config_id: Option<&str>,
         channel: &Channel<OcStreamEvent>,
+        path_rewrite: Option<(String, String)>,
     ) -> Result<String, String> {
         let (provider, model_id) = if let Some(pos) = model.find('/') {
             (model[..pos].to_string(), model[pos + 1..].to_string())
@@ -351,6 +369,7 @@ impl OpenCodeClient {
             channel.clone(),
             Some(ready_tx),
             Some(done_tx),
+            path_rewrite,
         ));
 
         // Wait briefly for SSE connection so early reasoning isn't missed
@@ -462,6 +481,7 @@ impl OpenCodeClient {
         channel: Channel<OcStreamEvent>,
         ready_tx: Option<oneshot::Sender<()>>,
         done_tx: Option<tokio::sync::mpsc::Sender<(String, Option<Value>, Option<f64>)>>,
+        path_rewrite: Option<(String, String)>,
     ) {
         let resp = match client
             .get(&format!("{}/event", base_url))
@@ -717,10 +737,18 @@ impl OpenCodeClient {
                             }
                             "tool" => {
                                 if let Some(name) = tool_name {
-                                    let input_str = state
+                                    let mut input_str = state
                                         .get("input")
                                         .map(|v| serde_json::to_string_pretty(v).unwrap_or_default())
                                         .unwrap_or_default();
+                                    // Rewrite local temp paths in tool inputs
+                                    if let Some((ref from, _)) = path_rewrite {
+                                        let from_fwd = from.replace('\\', "/");
+                                        let from_back = from.replace('/', "\\");
+                                        input_str = input_str.replace(&from_fwd, ".");
+                                        input_str = input_str.replace(&from_back, ".");
+                                        input_str = input_str.replace(from, ".");
+                                    }
                                     let status = if state_status.is_empty() {
                                         "pending".to_string()
                                     } else {
@@ -777,7 +805,7 @@ impl OpenCodeClient {
                     "file.edited" => {
                         if let Some(file) = props.get("file").and_then(|v| v.as_str()) {
                             let _ = channel.send(OcStreamEvent::FileEdit {
-                                path: file.to_string(),
+                                path: Self::rewrite_path(file, &path_rewrite),
                             });
                         }
                     }

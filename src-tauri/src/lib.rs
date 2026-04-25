@@ -340,7 +340,8 @@ async fn send_message(
 
         let result = state
             .client
-            .send_message(&session_id, &enriched_message, &model, agent_str, Some(&temp_str), None, &on_event)
+            .send_message(&session_id, &enriched_message, &model, agent_str, Some(&temp_str), None, &on_event,
+                Some((temp_str.clone(), remote_dir.clone())))
             .await;
 
         // After AI finishes, upload any created/modified files to the remote
@@ -378,7 +379,7 @@ async fn send_message(
     
     state
         .client
-        .send_message(&session_id, &message, &model, agent_str, workdir_ref, ssh_ref, &on_event)
+        .send_message(&session_id, &message, &model, agent_str, workdir_ref, ssh_ref, &on_event, None)
         .await?;
 
     Ok(())
