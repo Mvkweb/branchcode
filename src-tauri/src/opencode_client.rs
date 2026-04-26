@@ -280,15 +280,9 @@ impl OpenCodeClient {
             .await
             .map_err(|e| format!("Failed to parse messages: {}", e))?;
 
-        println!("Raw messages response: {}", serde_json::to_string_pretty(&raw).unwrap_or_default().chars().take(2000).collect::<String>());
-
         let messages: Vec<OcMessageResponse> = serde_json::from_value(raw.clone())
             .map_err(|e| format!("Failed to deserialize messages: {}\nRaw: {}", e, &raw.to_string().chars().take(500).collect::<String>()))?;
-        
-        // Log first message part types for debugging
-        if let Some(first) = messages.first() {
-            println!("First message parts: {:?}", first.parts.iter().map(|p| (&p.part_type, &p.text)).collect::<Vec<_>>());
-        }
+
 
         Ok(messages.into_iter().map(OcMessageResponse::normalize).collect())
     }

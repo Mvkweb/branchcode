@@ -22,7 +22,6 @@ import {
   Square,
   Star,
   Search,
-  Server,
   Globe,
 } from 'lucide-react';
 import { useChat } from '../hooks/useChat';
@@ -40,6 +39,7 @@ import { TopBar } from './TopBar';
 import { useVirtualMessages } from '../hooks/useVirtualScroll';
 import { getConfig, setModel, getModelInfo, getProviders, getAvailableModels, sshListServers, type ConfigInfo, type ProviderInfo, type SshServerConfig } from '../lib/tauri';
 import { DirectoryPickerModal, type SessionSource } from './DirectoryPickerModal';
+import { OsIcon } from './ssh/OsIcons';
 
 // ── Logo ──
 
@@ -259,7 +259,7 @@ function SidebarItem({
     <div
       onClick={onClick}
       className={`flex items-center gap-2.5 px-2 py-1.5 rounded-lg cursor-pointer text-[13px] transition-colors group
-        ${active ? (bg || 'text-neutral-200 font-medium') : 'text-neutral-400 hover:bg-[#1a1a1a] hover:text-neutral-200'}
+        ${active ? (bg || 'bg-[#161616] text-neutral-200 font-medium hover:bg-[#1e1e1e]') : 'text-neutral-400 hover:bg-[#1a1a1a] hover:text-neutral-200'}
         ${bg && active ? bg : ''}`}
     >
       {icon ? (
@@ -815,15 +815,49 @@ export default function App() {
     }
   }, [ssh.activeConnectionId, remoteFileTree.loadDirectory]);
 
-  useEffect(() => {
-    if (!activeSessionId) return;
+  // Destructure to get stable references
+  const { isConnected, connect: sshConnect, setActiveConnection } = ssh;
+  const { loadDirectory: loadRemoteDirectory } = remoteFileTree;
+  
+  const lastProcessedSessionIdRef = useRef<string | null>(null);
 
-    if (suppressAutoLoadSessionRef.current === activeSessionId) {
-      suppressAutoLoadSessionRef.current = null;
+  useEffect(() => {
+    if (!activeSessionId) {
+      lastProcessedSessionIdRef.current = null;
       return;
     }
-    loadMessages(activeSessionId);
-  },[activeSessionId, loadMessages]);
+
+    if (lastProcessedSessionIdRef.current !== activeSessionId) {
+      lastProcessedSessionIdRef.current = activeSessionId;
+      
+      // Auto-connect and set context if this is an SSH session
+      const session = sessions.find(s => s.id === activeSessionId);
+      if (session && session.ssh_config_id) {
+        setSessionSource({ path: session.workdir || '', configId: session.ssh_config_id });
+        if (!isConnected(session.ssh_config_id)) {
+          sshConnect(session.ssh_config_id).catch(console.error);
+        }
+        setActiveConnection(session.ssh_config_id);
+        loadRemoteDirectory(session.ssh_config_id, session.workdir || '.');
+      } else {
+        setSessionSource(null);
+      }
+
+      if (suppressAutoLoadSessionRef.current === activeSessionId) {
+        suppressAutoLoadSessionRef.current = null;
+      } else {
+        loadMessages(activeSessionId);
+      }
+    }
+  }, [
+    activeSessionId, 
+    sessions, 
+    loadMessages, 
+    isConnected, 
+    sshConnect, 
+    setActiveConnection, 
+    loadRemoteDirectory
+  ]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1033,7 +1067,7 @@ export default function App() {
                 icon={<Folder size={14} />} 
                 defaultOpen={true}
               >
-                {sessions.map((session) => (
+                {sessions.filter(s => !s.ssh_config_id).map((session) => (
                   <SidebarItem
                     key={session.id}
                     label={session.title || 'Untitled'}
@@ -1042,30 +1076,50 @@ export default function App() {
                     onDelete={() => deleteSession(session.id)}
                   />
                 ))}
-                {sessions.length === 0 && (
+                {sessions.filter(s => !s.ssh_config_id).length === 0 && (
                   <div className="text-[12px] text-neutral-600 px-2 py-1">No threads yet</div>
                 )}
               </ProjectFolder>
 
-              {/* Remote SSH Projects */}
-              {ssh.servers.map((server) => (
-                <ProjectFolder 
-                  key={server.id} 
-                  name={server.name} 
-                  icon={
-                    <div className="relative">
-                      <Server size={14} className="text-teal-500" />
-                      {ssh.isConnected(server.id) && (
-                        <div className="absolute -bottom-0.5 -right-0.5 w-[6px] h-[6px] bg-teal-400 rounded-full border border-[#0f0f0f]" />
-                      )}
-                    </div>
+              {/* Remote SSH Sessions — grouped by workdir */}
+              {(() => {
+                const sshSessions = sessions.filter(s => !!s.ssh_config_id);
+                // Group by ssh_config_id + workdir
+                const groups = new Map<string, { serverId: string; dirName: string; sessions: typeof sshSessions }>();
+                for (const s of sshSessions) {
+                  const key = `${s.ssh_config_id}::${s.workdir || ''}`;
+                  if (!groups.has(key)) {
+                    const dirName = s.workdir
+                      ? s.workdir.split('/').filter(Boolean).pop() || s.workdir
+                      : 'remote';
+                    groups.set(key, { serverId: s.ssh_config_id!, dirName, sessions: [] });
                   }
-                >
-                  <div className="text-[12px] text-neutral-600 px-2 py-1">
-                    {ssh.isConnected(server.id) ? 'No remote threads' : 'Not connected'}
-                  </div>
-                </ProjectFolder>
-              ))}
+                  groups.get(key)!.sessions.push(s);
+                }
+                return Array.from(groups.entries()).map(([key, group]) => {
+                  // Find the server config for its OS icon
+                  const serverConfig = savedSshServers.find(srv => srv.id === group.serverId);
+                  const osType = serverConfig?.os || 'linux';
+                  return (
+                    <ProjectFolder
+                      key={key}
+                      name={group.dirName}
+                      icon={<OsIcon os={osType} size={14} />}
+                      defaultOpen={true}
+                    >
+                      {group.sessions.map((session) => (
+                        <SidebarItem
+                          key={session.id}
+                          label={session.title || 'Untitled'}
+                          active={session.id === activeSessionId}
+                          onClick={() => selectSession(session.id)}
+                          onDelete={() => deleteSession(session.id)}
+                        />
+                      ))}
+                    </ProjectFolder>
+                  );
+                });
+              })()}
             </div>
           </div>
 

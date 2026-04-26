@@ -26,7 +26,34 @@ struct AppState {
     /// The OpenCode server doesn't persist workdir or ssh_config_id per session, so we track them ourselves.
     session_workdirs: Mutex<HashMap<String, String>>,
     session_ssh_configs: Mutex<HashMap<String, String>>,
+    session_meta_path: std::path::PathBuf,
 }
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct SessionMeta {
+    workdirs: HashMap<String, String>,
+    ssh_configs: HashMap<String, String>,
+}
+
+fn load_session_meta(path: &std::path::Path) -> SessionMeta {
+    if let Ok(contents) = std::fs::read_to_string(path) {
+        if let Ok(meta) = serde_json::from_str(&contents) {
+            return meta;
+        }
+    }
+    SessionMeta::default()
+}
+
+fn save_session_meta(state: &AppState) {
+    let meta = SessionMeta {
+        workdirs: state.session_workdirs.lock().unwrap().clone(),
+        ssh_configs: state.session_ssh_configs.lock().unwrap().clone(),
+    };
+    if let Ok(json) = serde_json::to_string_pretty(&meta) {
+        let _ = std::fs::write(&state.session_meta_path, json);
+    }
+}
+
 
 // ── Config commands ──
 
@@ -73,7 +100,22 @@ fn set_model(model: String, state: State<AppState>) -> Result<(), String> {
 
 #[tauri::command]
 async fn get_sessions(state: State<'_, AppState>) -> Result<Vec<opencode_client::OcSession>, String> {
-    state.client.list_sessions().await
+    let mut sessions = state.client.list_sessions().await?;
+
+    // OpenCode doesn't persist workdir/ssh_config_id — overlay from our local maps
+    let workdirs = state.session_workdirs.lock().unwrap().clone();
+    let ssh_configs = state.session_ssh_configs.lock().unwrap().clone();
+
+    for session in &mut sessions {
+        if session.workdir.is_none() {
+            session.workdir = workdirs.get(&session.id).cloned();
+        }
+        if session.ssh_config_id.is_none() {
+            session.ssh_config_id = ssh_configs.get(&session.id).cloned();
+        }
+    }
+
+    Ok(sessions)
 }
 
 #[tauri::command]
@@ -163,7 +205,7 @@ async fn create_session(
         }
     }
 
-    let session = state.client.create_session(title, workdir.clone(), ssh_config_id.clone()).await?;
+    let mut session = state.client.create_session(title, workdir.clone(), ssh_config_id.clone()).await?;
 
     // Store the workdir ourselves — the OpenCode server doesn't persist it
     if let Some(ref wd) = workdir {
@@ -181,6 +223,16 @@ async fn create_session(
         }
     }
 
+    // Ensure the session object itself has these fields for the frontend
+    if session.workdir.is_none() {
+        session.workdir = workdir;
+    }
+    if session.ssh_config_id.is_none() {
+        session.ssh_config_id = ssh_config_id;
+    }
+
+    save_session_meta(&state);
+
     Ok(session)
 }
 
@@ -196,7 +248,13 @@ async fn delete_session(
     session_id: String,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
-    state.client.delete_session(&session_id).await
+    let result = state.client.delete_session(&session_id).await;
+    if result.is_ok() {
+        state.session_workdirs.lock().unwrap().remove(&session_id);
+        state.session_ssh_configs.lock().unwrap().remove(&session_id);
+        save_session_meta(&state);
+    }
+    result
 }
 
 #[tauri::command]
@@ -673,6 +731,11 @@ pub fn run() {
     let ssh_data_dir = dirs::data_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("branchcode");
+        
+    std::fs::create_dir_all(&ssh_data_dir).unwrap_or_default();
+    let session_meta_path = ssh_data_dir.join("session_meta.json");
+    let session_meta = load_session_meta(&session_meta_path);
+
     let ssh_state: SshState = Arc::new(tokio::sync::Mutex::new(
         ssh_client::SshManager::new(ssh_data_dir),
     ));
@@ -686,8 +749,9 @@ pub fn run() {
         ssh_manager: ssh_state.clone(),
         server: TokioMutex::new(_server.ok()),
         server_port: port,
-        session_workdirs: Mutex::new(HashMap::new()),
-        session_ssh_configs: Mutex::new(HashMap::new()),
+        session_workdirs: Mutex::new(session_meta.workdirs),
+        session_ssh_configs: Mutex::new(session_meta.ssh_configs),
+        session_meta_path,
     };
 
     tauri::Builder::default()
