@@ -11,6 +11,8 @@ use tokio::sync::oneshot;
 pub struct OcSession {
     pub id: String,
     pub title: Option<String>,
+    pub workdir: Option<String>,
+    pub ssh_config_id: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
 }
@@ -199,11 +201,38 @@ impl OpenCodeClient {
             .map_err(|e| format!("Failed to parse sessions: {}", e))
     }
 
-    pub async fn create_session(&self, title: Option<String>) -> Result<OcSession, String> {
-        let body = match title {
-            Some(t) if !t.is_empty() => serde_json::json!({ "title": t }),
-            _ => serde_json::json!({}),
-        };
+    pub async fn get_session(&self, session_id: &str) -> Result<OcSession, String> {
+        let resp = self
+            .client
+            .get(&format!("{}/session/{}", self.base_url, session_id))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to get session: {}", e))?;
+
+        resp.json()
+            .await
+            .map_err(|e| format!("Failed to parse session: {}", e))
+    }
+
+    pub async fn create_session(
+        &self,
+        title: Option<String>,
+        workdir: Option<String>,
+        ssh_config_id: Option<String>,
+    ) -> Result<OcSession, String> {
+        let mut body = serde_json::Map::new();
+        if let Some(t) = title {
+            if !t.is_empty() {
+                body.insert("title".to_string(), serde_json::Value::String(t));
+            }
+        }
+        if let Some(w) = &workdir {
+            body.insert("workdir".to_string(), serde_json::Value::String(w.clone()));
+        }
+        if let Some(s) = ssh_config_id {
+            body.insert("ssh_config_id".to_string(), serde_json::Value::String(s));
+        }
+        let body = serde_json::Value::Object(body);
 
         let resp = self
             .client
@@ -213,9 +242,16 @@ impl OpenCodeClient {
             .await
             .map_err(|e| format!("Failed to create session: {}", e))?;
 
-        resp.json()
+        let mut session: OcSession = resp
+            .json()
             .await
-            .map_err(|e| format!("Failed to parse session: {}", e))
+            .map_err(|e| format!("Failed to parse session: {}", e))?;
+
+        if session.workdir.is_none() {
+            session.workdir = workdir;
+        }
+
+        Ok(session)
     }
 
     pub async fn delete_session(&self, id: &str) -> Result<bool, String> {
@@ -244,17 +280,28 @@ impl OpenCodeClient {
             .await
             .map_err(|e| format!("Failed to parse messages: {}", e))?;
 
-        println!("Raw messages response: {}", serde_json::to_string_pretty(&raw).unwrap_or_default().chars().take(2000).collect::<String>());
-
         let messages: Vec<OcMessageResponse> = serde_json::from_value(raw.clone())
             .map_err(|e| format!("Failed to deserialize messages: {}\nRaw: {}", e, &raw.to_string().chars().take(500).collect::<String>()))?;
-        
-        // Log first message part types for debugging
-        if let Some(first) = messages.first() {
-            println!("First message parts: {:?}", first.parts.iter().map(|p| (&p.part_type, &p.text)).collect::<Vec<_>>());
-        }
+
 
         Ok(messages.into_iter().map(OcMessageResponse::normalize).collect())
+    }
+
+    /// Rewrite a local temp path to the remote display path.
+    fn rewrite_path(path: &str, rewrite: &Option<(String, String)>) -> String {
+        if let Some((from, to)) = rewrite {
+            // Handle both forward and backslash variants
+            let normalized = path.replace('\\', "/");
+            let from_normalized = from.replace('\\', "/");
+            if normalized.starts_with(&from_normalized) {
+                let rel = normalized[from_normalized.len()..].trim_start_matches('/');
+                if rel.is_empty() {
+                    return to.clone();
+                }
+                return format!("{}/{}", to.trim_end_matches('/'), rel);
+            }
+        }
+        path.to_string()
     }
 
     pub async fn send_message(
@@ -263,7 +310,10 @@ impl OpenCodeClient {
         message: &str,
         model: &str,
         agent: Option<&str>,
+        workdir: Option<&str>,
+        ssh_config_id: Option<&str>,
         channel: &Channel<OcStreamEvent>,
+        path_rewrite: Option<(String, String)>,
     ) -> Result<String, String> {
         let (provider, model_id) = if let Some(pos) = model.find('/') {
             (model[..pos].to_string(), model[pos + 1..].to_string())
@@ -288,6 +338,18 @@ impl OpenCodeClient {
             }
         }
 
+        if let Some(wd) = workdir {
+            if !wd.is_empty() {
+                body["workdir"] = serde_json::json!(wd);
+            }
+        }
+
+        if let Some(ssh_id) = ssh_config_id {
+            if !ssh_id.is_empty() {
+                body["ssh_config_id"] = serde_json::json!(ssh_id);
+            }
+        }
+
         // Start SSE listener with ready signal
         let (ready_tx, ready_rx) = oneshot::channel();
         let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<(String, Option<Value>, Option<f64>)>(1);
@@ -301,6 +363,7 @@ impl OpenCodeClient {
             channel.clone(),
             Some(ready_tx),
             Some(done_tx),
+            path_rewrite,
         ));
 
         // Wait briefly for SSE connection so early reasoning isn't missed
@@ -412,6 +475,7 @@ impl OpenCodeClient {
         channel: Channel<OcStreamEvent>,
         ready_tx: Option<oneshot::Sender<()>>,
         done_tx: Option<tokio::sync::mpsc::Sender<(String, Option<Value>, Option<f64>)>>,
+        path_rewrite: Option<(String, String)>,
     ) {
         let resp = match client
             .get(&format!("{}/event", base_url))
@@ -667,10 +731,18 @@ impl OpenCodeClient {
                             }
                             "tool" => {
                                 if let Some(name) = tool_name {
-                                    let input_str = state
+                                    let mut input_str = state
                                         .get("input")
                                         .map(|v| serde_json::to_string_pretty(v).unwrap_or_default())
                                         .unwrap_or_default();
+                                    // Rewrite local temp paths in tool inputs
+                                    if let Some((ref from, _)) = path_rewrite {
+                                        let from_fwd = from.replace('\\', "/");
+                                        let from_back = from.replace('/', "\\");
+                                        input_str = input_str.replace(&from_fwd, ".");
+                                        input_str = input_str.replace(&from_back, ".");
+                                        input_str = input_str.replace(from, ".");
+                                    }
                                     let status = if state_status.is_empty() {
                                         "pending".to_string()
                                     } else {
@@ -727,7 +799,7 @@ impl OpenCodeClient {
                     "file.edited" => {
                         if let Some(file) = props.get("file").and_then(|v| v.as_str()) {
                             let _ = channel.send(OcStreamEvent::FileEdit {
-                                path: file.to_string(),
+                                path: Self::rewrite_path(file, &path_rewrite),
                             });
                         }
                     }

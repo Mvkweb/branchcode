@@ -15,6 +15,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", features = ["stream", "json"] }
@@ -26,6 +27,11 @@ portable-pty = "0.8"
 anyhow = "1"
 dashmap = "6"
 base64 = "0.22"
+russh = "0.46"
+russh-keys = "0.46"
+russh-sftp = "2.0"
+uuid = { version = "1", features = ["v4"] }
+async-trait = "0.1"
 
 [lib]
 name = "branchcode_lib"

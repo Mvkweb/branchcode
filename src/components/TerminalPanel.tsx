@@ -22,15 +22,27 @@ function TerminalView({ term, active }: { term: TerminalInstance; active: boolea
       if (!ref.current || ref.current.clientWidth === 0) return;
       try {
         term.fitAddon.fit();
-        invoke('resize_terminal', {
-          id: term.id,
-          cols: term.terminal.cols,
-          rows: term.terminal.rows,
-        }).catch(() => {});
+        const cols = term.terminal.cols;
+        const rows = term.terminal.rows;
+
+        if (term.id.startsWith('ssh-shell-')) {
+          invoke('ssh_resize_shell', { 
+            shellId: term.id, 
+            cols, 
+            rows 
+          }).catch(() => {});
+        } else {
+          invoke('resize_terminal', {
+            id: term.id,
+            cols,
+            rows,
+          }).catch(() => {});
+        }
       } catch {}
     };
 
     doResize();
+    term.terminal.focus();
 
     const resizeObserver = new ResizeObserver(() => {
       if (resizeTimeout.current) clearTimeout(resizeTimeout.current);
@@ -56,6 +68,17 @@ function TerminalView({ term, active }: { term: TerminalInstance; active: boolea
 
 export function TerminalPanel({ onClose, isOpen }: { onClose?: () => void; isOpen: boolean }) {
   const { terminals, activeTerminalId, createTerminal, closeTerminal, setActiveTerminal } = useTerminal();
+
+  useEffect(() => {
+    const handleSshTerminal = (e: Event) => {
+      const customEvent = e as CustomEvent<{ configId: string, serverName: string }>;
+      const { configId, serverName } = customEvent.detail;
+      createTerminal({ type: 'ssh', configId, serverName });
+    };
+
+    window.addEventListener('spawn-ssh-terminal', handleSshTerminal);
+    return () => window.removeEventListener('spawn-ssh-terminal', handleSshTerminal);
+  }, [createTerminal]);
 
   useEffect(() => {
     if (isOpen && terminals.length === 0) {
@@ -84,7 +107,7 @@ export function TerminalPanel({ onClose, isOpen }: { onClose?: () => void; isOpe
                 }`}
               >
                 <TerminalIcon size={12} />
-                <span className="text-xs font-mono">{t.id}</span>
+                <span className="text-xs font-mono">{t.label || t.id}</span>
                 <button
                   onClick={(e) => { e.stopPropagation(); handleClose(t.id); }}
                   className={`p-0.5 rounded hover:bg-white/10 ${isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}

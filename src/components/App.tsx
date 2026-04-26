@@ -22,18 +22,24 @@ import {
   Square,
   Star,
   Search,
+  Globe,
 } from 'lucide-react';
 import { useChat } from '../hooks/useChat';
 import { useSessions } from '../hooks/useSessions';
 import { useFileTree } from '../hooks/useFileTree';
+import { useRemoteFileTree } from '../hooks/useRemoteFileTree';
 import { useGit } from '../hooks/useGit';
+import { useSsh } from '../hooks/useSsh';
 import { SettingsModal } from './Settings';
 import UpdateModal from './UpdateModal';
 import { ChatMessages, MessagePlaceholder } from './ChatMessages';
 import { GitPanel } from './GitPanel';
 import { TerminalPanel } from './TerminalPanel';
+import { TopBar } from './TopBar';
 import { useVirtualMessages } from '../hooks/useVirtualScroll';
-import { getConfig, setModel, getModelInfo, getProviders, getAvailableModels, type ConfigInfo, type ProviderInfo } from '../lib/tauri';
+import { getConfig, setModel, getModelInfo, getProviders, getAvailableModels, sshListServers, type ConfigInfo, type ProviderInfo, type SshServerConfig } from '../lib/tauri';
+import { DirectoryPickerModal, type SessionSource } from './DirectoryPickerModal';
+import { OsIcon } from './ssh/OsIcons';
 
 // ── Logo ──
 
@@ -253,7 +259,7 @@ function SidebarItem({
     <div
       onClick={onClick}
       className={`flex items-center gap-2.5 px-2 py-1.5 rounded-lg cursor-pointer text-[13px] transition-colors group
-        ${active ? (bg || 'text-neutral-200 font-medium') : 'text-neutral-400 hover:bg-[#1a1a1a] hover:text-neutral-200'}
+        ${active ? (bg || 'bg-[#161616] text-neutral-200 font-medium hover:bg-[#1e1e1e]') : 'text-neutral-400 hover:bg-[#1a1a1a] hover:text-neutral-200'}
         ${bg && active ? bg : ''}`}
     >
       {icon ? (
@@ -273,6 +279,51 @@ function SidebarItem({
           <Trash2 size={12} />
         </button>
       )}
+    </div>
+  );
+}
+
+function ProjectFolder({ 
+  name, 
+  icon, 
+  children, 
+  defaultOpen = false 
+}: { 
+  name: string; 
+  icon: React.ReactNode; 
+  children: React.ReactNode; 
+  defaultOpen?: boolean; 
+}) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+  return (
+    <div className="mb-1">
+      <button 
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full flex items-center justify-between px-2 py-1.5 text-sm text-neutral-400 hover:text-neutral-200 transition-colors group rounded-lg hover:bg-[#1a1a1a]"
+      >
+        <div className="flex items-center gap-2 overflow-hidden truncate">
+          <div className="flex items-center justify-center w-4 h-4 text-neutral-500 group-hover:text-neutral-300">
+            {icon}
+          </div>
+          <span className="flex-1 text-left truncate font-medium">{name}</span>
+        </div>
+        <ChevronDown size={12} className={`transition-transform duration-200 text-neutral-500 ${isOpen ? '' : '-rotate-90'}`} />
+      </button>
+      <AnimatePresence initial={false}>
+        {isOpen && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <div className="pl-6 pr-1 py-1 space-y-0.5">
+              {children}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -660,6 +711,9 @@ export default function App() {
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [showFileTree, setShowFileTree] = useState(false);
   const [showGitPanel, setShowGitPanel] = useState(false);
+
+  // SSH state
+  const ssh = useSsh();
   
   // Terminal sizing state
   const [showTerminal, setShowTerminal] = useState(false);
@@ -670,6 +724,11 @@ export default function App() {
   const[showSettings, setShowSettings] = useState(false);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [appMode, setAppMode] = useState<'plan' | 'build'>('build');
+  
+  // Session source for working directory
+  const [sessionSource, setSessionSource] = useState<SessionSource | null>(null);
+  const [showDirectoryPicker, setShowDirectoryPicker] = useState(false);
+  const [savedSshServers, setSavedSshServers] = useState<SshServerConfig[]>([]);
 
   const isVisible = isPinned || isHovered;
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -678,9 +737,10 @@ export default function App() {
   const suppressAutoLoadSessionRef = useRef<string | null>(null);
 
   const { messages, isStreaming, isLoading, status, send, loadMessages, clearMessages, getSessionUsage } = useChat();
-  const { sessions, activeSessionId, createSession, deleteSession, selectSession } =
+  const { sessions, activeSessionId, createSession, deleteSession, selectSession, renameSessionLocal } =
     useSessions();
   const { files, loadDirectory } = useFileTree();
+  const remoteFileTree = useRemoteFileTree();
   const git = useGit(true, 5000);
   const [contextLimit, setContextLimit] = useState(200000);
 
@@ -700,6 +760,13 @@ export default function App() {
   useEffect(() => {
     loadConfig();
   }, [loadConfig]);
+  
+  // Load SSH servers
+  useEffect(() => {
+    sshListServers()
+      .then(setSavedSshServers)
+      .catch(console.error);
+  }, []);
 
   const findContextLimit = useCallback((modelId: string): number => {
     const pCache = providersCache;
@@ -742,14 +809,55 @@ export default function App() {
   }, [config?.project_dir, loadDirectory]);
 
   useEffect(() => {
-    if (!activeSessionId) return;
+    // If we have an active remote connection, default to listing `.`
+    if (ssh.activeConnectionId) {
+      remoteFileTree.loadDirectory(ssh.activeConnectionId, '.');
+    }
+  }, [ssh.activeConnectionId, remoteFileTree.loadDirectory]);
 
-    if (suppressAutoLoadSessionRef.current === activeSessionId) {
-      suppressAutoLoadSessionRef.current = null;
+  // Destructure to get stable references
+  const { isConnected, connect: sshConnect, setActiveConnection } = ssh;
+  const { loadDirectory: loadRemoteDirectory } = remoteFileTree;
+  
+  const lastProcessedSessionIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      lastProcessedSessionIdRef.current = null;
       return;
     }
-    loadMessages(activeSessionId);
-  },[activeSessionId, loadMessages]);
+
+    if (lastProcessedSessionIdRef.current !== activeSessionId) {
+      lastProcessedSessionIdRef.current = activeSessionId;
+      
+      // Auto-connect and set context if this is an SSH session
+      const session = sessions.find(s => s.id === activeSessionId);
+      if (session && session.ssh_config_id) {
+        setSessionSource({ path: session.workdir || '', configId: session.ssh_config_id });
+        if (!isConnected(session.ssh_config_id)) {
+          sshConnect(session.ssh_config_id).catch(console.error);
+        }
+        setActiveConnection(session.ssh_config_id);
+        loadRemoteDirectory(session.ssh_config_id, session.workdir || '.');
+      } else {
+        setSessionSource(null);
+      }
+
+      if (suppressAutoLoadSessionRef.current === activeSessionId) {
+        suppressAutoLoadSessionRef.current = null;
+      } else {
+        loadMessages(activeSessionId);
+      }
+    }
+  }, [
+    activeSessionId, 
+    sessions, 
+    loadMessages, 
+    isConnected, 
+    sshConnect, 
+    setActiveConnection, 
+    loadRemoteDirectory
+  ]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -784,7 +892,12 @@ export default function App() {
     let sessionId = activeSessionId;
 
     if (!sessionId) {
-      const session = await createSession(text.slice(0, 50));
+      // Pass workdir and sshConfigId from directory picker selection
+      const session = await createSession(
+        text.slice(0, 50),
+        sessionSource?.path,
+        sessionSource?.configId,
+      );
       if (!session) return;
 
       sessionId = session.id;
@@ -793,7 +906,7 @@ export default function App() {
 
     await send(sessionId, text, appMode);
     setInput('');
-  },[input, isStreaming, config?.model, activeSessionId, createSession, send, appMode]);
+  },[input, isStreaming, config?.model, activeSessionId, createSession, send, appMode, sessionSource]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -803,8 +916,17 @@ export default function App() {
   };
 
   const handleNewChat = async () => {
-    await createSession();
     clearMessages();
+    setSessionSource(null);
+    selectSession('');  // Clear active session so handleSend creates a new one
+    setShowDirectoryPicker(true);
+  };
+  
+  const handleDirectorySelect = async (path: string, configId?: string) => {
+    // Don't create a session yet — just remember the source so handleSend
+    // can pass it when the user actually sends their first message.
+    setSessionSource({ path, configId });
+    setShowDirectoryPicker(false);
   };
 
   // ── Drag & Resize Logic for Terminal Panel ──
@@ -929,63 +1051,85 @@ export default function App() {
         <div className="flex-1 overflow-y-auto custom-scrollbar mt-4">
           <div className="px-4 mb-6">
             <div className="flex items-center justify-between text-[11px] font-semibold text-neutral-500 mb-2 tracking-wider">
-              CHATS
+              THREADS
               <button
                 onClick={handleNewChat}
                 className="hover:text-neutral-300 transition-colors"
+                title="New Thread"
               >
                 <FolderPlus size={14} />
               </button>
             </div>
-            <div className="space-y-0.5">
-              {sessions.map((session) => (
-                <SidebarItem
-                  key={session.id}
-                  icon={<Folder size={14} />}
-                  label={session.title || 'Untitled'}
-                  active={session.id === activeSessionId}
-                  onClick={() => selectSession(session.id)}
-                  onDelete={() => deleteSession(session.id)}
-                />
-              ))}
-              {sessions.length === 0 && (
-                <div className="text-[12px] text-neutral-600 px-2 py-1">No chats yet</div>
-              )}
+            <div className="space-y-1">
+              {/* Local Workspace Project */}
+              <ProjectFolder 
+                name={config?.project_dir ? config.project_dir.split('\\').pop() || 'Local Workspace' : 'Local Workspace'} 
+                icon={<Folder size={14} />} 
+                defaultOpen={true}
+              >
+                {sessions.filter(s => !s.ssh_config_id).map((session) => (
+                  <SidebarItem
+                    key={session.id}
+                    label={session.title || 'Untitled'}
+                    active={session.id === activeSessionId}
+                    onClick={() => selectSession(session.id)}
+                    onDelete={() => deleteSession(session.id)}
+                  />
+                ))}
+                {sessions.filter(s => !s.ssh_config_id).length === 0 && (
+                  <div className="text-[12px] text-neutral-600 px-2 py-1">No threads yet</div>
+                )}
+              </ProjectFolder>
+
+              {/* Remote SSH Sessions — grouped by workdir */}
+              {(() => {
+                const sshSessions = sessions.filter(s => !!s.ssh_config_id);
+                // Group by ssh_config_id + workdir
+                const groups = new Map<string, { serverId: string; dirName: string; sessions: typeof sshSessions }>();
+                for (const s of sshSessions) {
+                  const key = `${s.ssh_config_id}::${s.workdir || ''}`;
+                  if (!groups.has(key)) {
+                    const dirName = s.workdir
+                      ? s.workdir.split('/').filter(Boolean).pop() || s.workdir
+                      : 'remote';
+                    groups.set(key, { serverId: s.ssh_config_id!, dirName, sessions: [] });
+                  }
+                  groups.get(key)!.sessions.push(s);
+                }
+                return Array.from(groups.entries()).map(([key, group]) => {
+                  // Find the server config for its OS icon
+                  const serverConfig = savedSshServers.find(srv => srv.id === group.serverId);
+                  const osType = serverConfig?.os || 'linux';
+                  return (
+                    <ProjectFolder
+                      key={key}
+                      name={group.dirName}
+                      icon={<OsIcon os={osType} size={14} />}
+                      defaultOpen={true}
+                    >
+                      {group.sessions.map((session) => (
+                        <SidebarItem
+                          key={session.id}
+                          label={session.title || 'Untitled'}
+                          active={session.id === activeSessionId}
+                          onClick={() => selectSession(session.id)}
+                          onDelete={() => deleteSession(session.id)}
+                        />
+                      ))}
+                    </ProjectFolder>
+                  );
+                });
+              })()}
             </div>
           </div>
 
           <div className="px-4 mb-6">
-            <button
-              onClick={() => setShowFileTree(!showFileTree)}
-              className="flex items-center w-full justify-between text-[11px] font-semibold text-neutral-500 mb-2 tracking-wider hover:text-neutral-300 transition-colors"
-            >
+            <div className="flex items-center w-full justify-between text-[11px] font-semibold text-neutral-500 mb-2 tracking-wider">
               <div className="flex items-center gap-2">
                 <SquareTerminal size={12} />
                 FILES
               </div>
-              <ChevronDown
-                size={12}
-                className={`transition-transform ${showFileTree ? 'rotate-180' : ''}`}
-              />
-            </button>
-            {showFileTree && (
-              <div className="space-y-0.5">
-                {Object.entries(files).map(([name, info]) => {
-                  const entry = info as Record<string, unknown>;
-                  const isDir = entry.type === 'directory';
-                  return (
-                    <SidebarItem
-                      key={name}
-                      icon={isDir ? <Folder size={14} /> : <FileText size={14} />}
-                      label={name}
-                      onClick={() => {
-                        if (isDir && entry.path) loadDirectory(entry.path as string);
-                      }}
-                    />
-                  );
-                })}
-              </div>
-            )}
+            </div>
           </div>
         </div>
 
@@ -1168,6 +1312,19 @@ export default function App() {
             </>
           ) : (
             <>
+              {/* ── Top Bar ── */}
+              <TopBar
+                title={sessions.find(s => s.id === activeSessionId)?.title || 'New Chat'}
+                projectDir={config?.project_dir}
+                sshConnections={ssh.connections}
+                onTitleChange={(newTitle) => {
+                  if (activeSessionId) {
+                    renameSessionLocal(activeSessionId, newTitle);
+                  }
+                }}
+                gitStatus={git.status}
+              />
+
               {/* ── Chat ── */}
               <VirtualizedChat messages={messages} messagesEndRef={messagesEndRef} isLoading={isLoading} />
 
@@ -1301,31 +1458,54 @@ export default function App() {
       </div>
 
       {/* Git Panel - Right Sidebar */}
-      <AnimatePresence>
-        {showGitPanel && (
-          <motion.div
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 380, opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
-            transition={{ type: 'spring', bounce: 0, duration: 0.25 }}
-            className="flex-shrink-0 h-full border-l border-[#1a1a1a]"
-          >
-            <GitPanel
-              status={git.status}
-              branches={git.branches}
-              currentBranch={git.currentBranch}
-              loading={git.loading}
-              onRefresh={git.refresh}
-              onStageFile={git.stageFile}
-              onUnstageFile={git.unstageFile}
-              onStageAll={git.stageAll}
-              onCommit={git.commit}
-              onCheckoutBranch={git.checkoutBranch}
-              onCreateBranch={git.createBranch}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <motion.div
+        initial={false}
+        animate={{ width: showGitPanel ? 380 : 40 }}
+        transition={{ type: 'spring', bounce: 0, duration: 0.25 }}
+        className="flex-shrink-0 h-full border-l border-[#1a1a1a] overflow-hidden bg-[#0d0d0d] relative z-20"
+      >
+        <div className="absolute top-0 right-0 w-[380px] h-full">
+          <GitPanel
+            status={git.status}
+            branches={git.branches}
+            currentBranch={git.currentBranch}
+            loading={git.loading}
+            onRefresh={git.refresh}
+            onStageFile={git.stageFile}
+            onUnstageFile={git.unstageFile}
+            onStageAll={git.stageAll}
+            onCommit={git.commit}
+            onCheckoutBranch={git.checkoutBranch}
+            onCreateBranch={git.createBranch}
+            sshServers={ssh.servers}
+            sshConnections={ssh.connections}
+            sshConnecting={ssh.connecting}
+            sshError={ssh.error}
+            onSshSaveServer={ssh.saveServer}
+            onSshDeleteServer={ssh.deleteServer}
+            onSshConnect={ssh.connect}
+            onSshDisconnect={ssh.disconnect}
+            onSshSpawnTerminal={(configId, serverName) => {
+              setShowTerminal(true);
+              window.dispatchEvent(new CustomEvent('spawn-ssh-terminal', { 
+                detail: { configId, serverName } 
+              }));
+            }}
+            isOpen={showGitPanel}
+            onToggle={setShowGitPanel}
+          />
+        </div>
+      </motion.div>
+      
+      {/* ── Directory Picker Modal for New Session ── */}
+      <DirectoryPickerModal
+        isOpen={showDirectoryPicker}
+        onClose={() => setShowDirectoryPicker(false)}
+        onSelect={handleDirectorySelect}
+        initialMode={sessionSource?.configId ? 'ssh' : 'local'}
+        sshConnections={ssh.connections}
+        savedSshServers={savedSshServers}
+      />
     </div>
   );
 }

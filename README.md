@@ -37,7 +37,7 @@ Download from [Releases](https://github.com/branchcode/branchcode/releases).
 | 5  | Custom model endpoints             |   ❌   |
 | 6  | File tree & project management     |   ❌   |
 | 7  | Settings & preferences             |   ❌   |
-| 8  | SSH tunneling (remote server coding)|   ❌   |
+| 8  | SSH tunneling (remote server coding)|   🔨   |
 | 9  | Cross-platform testing (Linux/macOS)|   ⚠️   |
 
 ## Developing
