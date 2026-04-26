@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicehash/tauri-schema/v2/schema.json",
   "productName": "branchcode",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "identifier": "com.branchcode.dev",
   "build": {
     "frontendDist": "../dist",
