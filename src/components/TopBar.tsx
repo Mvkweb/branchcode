@@ -11,6 +11,7 @@ import {
   Layout,
   FolderOpen
 } from 'lucide-react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { GitStatus } from '../lib/tauri';
 import { DirectoryPickerModal } from './DirectoryPickerModal';
 
@@ -85,14 +86,18 @@ export function TopBar({
 
   return (
     <>
-      <div className="flex-shrink-0 h-[44px] w-full flex items-center justify-between px-4 border-b border-white/5 bg-[#0e0e0e] z-20 select-none">
+      <div className="flex-shrink-0 h-[44px] w-full border-b border-white/5 bg-[#0e0e0e] z-20 select-none relative">
+        <div data-tauri-drag-region className="absolute inset-0 z-0 bg-transparent" />
         
-        {/* Left side: Title, Folder Name & Options */}
-        <div className="flex items-center gap-3 flex-1 min-w-0 h-full">
-          <div className="flex items-center gap-2 max-w-[60%]">
-            <AnimatePresence mode="wait">
-              {isEditing ? (
-                <motion.div
+        {/* Container for content, pointer-events-none lets clicks pass to drag region */}
+        <div className="absolute inset-0 flex items-center justify-between px-4 pointer-events-none z-10">
+          
+          {/* Left side: Title, Folder Name & Options */}
+          <div className="flex items-center gap-3 flex-1 min-w-0 h-full">
+            <div className="flex items-center gap-2 max-w-[60%] h-full pointer-events-auto">
+              <AnimatePresence mode="wait">
+                {isEditing ? (
+                  <motion.div
                   key="input-container"
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
@@ -147,14 +152,14 @@ export function TopBar({
           </div>
 
           {!isEditing && (
-            <button className="text-neutral-500 hover:text-neutral-300 transition-colors flex items-center justify-center ml-1">
+            <button className="text-neutral-500 hover:text-neutral-300 transition-colors flex items-center justify-center ml-1 pointer-events-auto">
               <MoreHorizontal size={16} strokeWidth={2} />
             </button>
           )}
         </div>
 
         {/* Right side: Tool actions */}
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-2 flex-shrink-0 pointer-events-auto">
           <button 
             onClick={() => setIsPickerOpen(true)}
             className="flex items-center gap-1.5 px-2 py-1 rounded-md border border-white/5 bg-white/[0.03] hover:bg-white/[0.08] transition-colors cursor-pointer mr-1"
@@ -196,6 +201,7 @@ export function TopBar({
             </div>
             <Columns size={13} className="text-neutral-500" strokeWidth={2} />
           </div>
+        </div>
         </div>
       </div>
 

@@ -40,6 +40,7 @@ import { useVirtualMessages } from '../hooks/useVirtualScroll';
 import { getConfig, setModel, getModelInfo, getProviders, getAvailableModels, sshListServers, type ConfigInfo, type ProviderInfo, type SshServerConfig } from '../lib/tauri';
 import { DirectoryPickerModal, type SessionSource } from './DirectoryPickerModal';
 import { OsIcon } from './ssh/OsIcons';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 // ── Logo ──
 
@@ -980,12 +981,7 @@ export default function App() {
         {showUpdateModal && <UpdateModal isOpen={showUpdateModal} onClose={() => setShowUpdateModal(false)} />}
       </AnimatePresence>
       
-      {/* Window Controls */}
-      <div className="absolute top-0 left-0 h-12 flex items-center px-4 gap-2 z-40 pointer-events-none">
-        <div className="w-3 h-3 rounded-full bg-[#ff5f56] pointer-events-auto cursor-pointer" />
-        <div className="w-3 h-3 rounded-full bg-[#ffbd2e] pointer-events-auto cursor-pointer" />
-        <div className="w-3 h-3 rounded-full bg-[#27c93f] pointer-events-auto cursor-pointer" />
-      </div>
+      {/* Removed global window controls so they move with the sidebar */}
 
       {!isPinned && (
         <div
@@ -1011,20 +1007,39 @@ export default function App() {
         }}
         className="absolute left-0 top-0 bottom-0 w-[260px] bg-[#0f0f0f] border-r border-[#1a1a1a] flex flex-col z-30"
       >
-        <div className="h-12 flex items-center px-4 justify-end">
-          <button
-            onClick={() => {
-              setIsPinned(!isPinned);
-              setIsHovered(false);
-            }}
-            className={`transition-colors ${
-              isPinned
-                ? 'text-neutral-500 hover:text-neutral-300'
-                : 'text-neutral-200 hover:text-white'
-            }`}
-          >
-            <PanelLeft size={16} />
-          </button>
+        <div className="h-12 flex items-center px-4 flex-shrink-0 relative">
+          <div data-tauri-drag-region className="absolute inset-0 z-0 bg-transparent" />
+          
+          <div className="absolute inset-0 flex items-center px-4 justify-between pointer-events-none z-10">
+            <div className="flex items-center gap-2 pointer-events-auto">
+              <div onClick={() => { console.log('[WIN] close clicked'); getCurrentWindow().close(); }} className="w-3 h-3 rounded-full bg-[#ff5f56] cursor-pointer hover:opacity-80 transition-opacity" />
+              <div onClick={() => { console.log('[WIN] minimize clicked'); getCurrentWindow().minimize(); }} className="w-3 h-3 rounded-full bg-[#ffbd2e] cursor-pointer hover:opacity-80 transition-opacity" />
+              <div onClick={async () => {
+                try {
+                  const win = getCurrentWindow();
+                  console.log('[WIN] green clicked, toggling maximize');
+                  await win.toggleMaximize();
+                  console.log('[WIN] toggleMaximize done');
+                } catch (e) {
+                  console.error('[WIN] maximize error:', e);
+                }
+              }} className="w-3 h-3 rounded-full bg-[#27c93f] cursor-pointer hover:opacity-80 transition-opacity" />
+            </div>
+            
+            <button
+              onClick={() => {
+                setIsPinned(!isPinned);
+                setIsHovered(false);
+              }}
+              className={`pointer-events-auto transition-colors ${
+                isPinned
+                  ? 'text-neutral-500 hover:text-neutral-300'
+                  : 'text-neutral-200 hover:text-white'
+              }`}
+            >
+              <PanelLeft size={16} />
+            </button>
+          </div>
         </div>
 
         <div className="px-4 py-2">
@@ -1177,9 +1192,11 @@ export default function App() {
       <div className="flex-1 flex flex-col relative overflow-hidden bg-[#0a0a0a]">
         
         {/* Chat / Landing Zone */}
-        <div className="flex-1 flex flex-col relative overflow-hidden">
+        <div className="flex-1 flex flex-col relative overflow-hidden z-10">
           {!hasMessages ? (
             <>
+              <div data-tauri-drag-region className="absolute top-0 left-0 right-0 h-12 z-20 bg-transparent" />
+              <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col relative pt-8">
               {/* ── Landing ── */}
               <div
                 className="absolute inset-0 opacity-[0.08] pointer-events-none"
@@ -1309,8 +1326,9 @@ export default function App() {
                   Terminal
                 </button>
               </div>
-            </>
-          ) : (
+            </div>
+          </>
+        ) : (
             <>
               {/* ── Top Bar ── */}
               <TopBar
